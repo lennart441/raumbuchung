@@ -34,6 +34,24 @@ class CreateBookingDto {
   note?: string;
 }
 
+class UpdateBookingDto {
+  @IsOptional()
+  @IsString()
+  roomId?: string;
+
+  @IsOptional()
+  @IsDateString()
+  startAt?: string;
+
+  @IsOptional()
+  @IsDateString()
+  endAt?: string;
+
+  @IsOptional()
+  @IsString()
+  note?: string;
+}
+
 class DecisionDto {
   @IsOptional()
   @IsString()
@@ -103,6 +121,21 @@ export class AppController {
   @Get('bookings/me')
   async myBookings(@Req() req: RequestWithUser) {
     return this.appService.myBookings(req.user);
+  }
+
+  @UseGuards(AuthGuard)
+  @Patch('bookings/:id')
+  async updateBooking(
+    @Req() req: RequestWithUser,
+    @Param('id') id: string,
+    @Body() body: UpdateBookingDto,
+  ) {
+    return this.appService.updateBooking(req.user, id, {
+      roomId: body.roomId,
+      startAt: body.startAt ? new Date(body.startAt) : undefined,
+      endAt: body.endAt ? new Date(body.endAt) : undefined,
+      note: body.note,
+    });
   }
 
   @UseGuards(AuthGuard, RolesGuard)

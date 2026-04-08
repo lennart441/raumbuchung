@@ -15,6 +15,13 @@ type CreateBookingInput = {
   note?: string;
 };
 
+type UpdateBookingInput = {
+  roomId?: string;
+  startAt?: Date;
+  endAt?: Date;
+  note?: string;
+};
+
 @Injectable()
 export class AppService {
   constructor(private readonly prisma: PrismaService) {}
@@ -143,6 +150,68 @@ export class AppService {
       where: { userId: user.id },
       include: { room: true, decisions: true },
       orderBy: { startAt: 'desc' },
+    });
+  }
+
+  async updateBooking(identity: AuthUser, bookingId: string, input: UpdateBookingInput) {
+    const actor = await this.ensureUser(identity);
+    const existing = await this.prisma.booking.findUnique({
+      where: { id: bookingId },
+      include: { user: true },
+    });
+    if (!existing) throw new NotFoundException('Buchung nicht gefunden');
+
+    if (actor.role !== UserRole.ADMIN && existing.userId !== actor.id) {
+      throw new ForbiddenException('Keine Berechtigung fuer diese Buchung');
+    }
+
+    const roomId = input.roomId ?? existing.roomId;
+    const startAt = input.startAt ?? existing.startAt;
+    const endAt = input.endAt ?? existing.endAt;
+
+    await this.assertUserCanBook(existing.userId, roomId);
+    await this.assertValidRange(startAt, endAt);
+
+    const room = await this.prisma.room.findUnique({ where: { id: roomId } });
+    if (!room || !room.isActive) {
+      throw new NotFoundException('Raum nicht gefunden');
+    }
+
+    const [blocking, conflicts] = await Promise.all([
+      this.prisma.roomBlock.count({
+        where: {
+          roomId,
+          startAt: { lt: endAt },
+          endAt: { gt: startAt },
+        },
+      }),
+      this.prisma.booking.count({
+        where: {
+          roomId,
+          id: { not: bookingId },
+          status: { in: [BookingStatus.APPROVED, BookingStatus.PENDING] },
+          startAt: { lt: endAt },
+          endAt: { gt: startAt },
+        },
+      }),
+    ]);
+
+    const isOverbooked = blocking > 0 || conflicts > 0;
+    const status =
+      existing.user.role === UserRole.EXTENDED_USER && !isOverbooked
+        ? BookingStatus.APPROVED
+        : BookingStatus.PENDING;
+
+    return this.prisma.booking.update({
+      where: { id: bookingId },
+      data: {
+        roomId,
+        startAt,
+        endAt,
+        note: input.note ?? existing.note ?? undefined,
+        isOverbooked,
+        status,
+      },
     });
   }
 

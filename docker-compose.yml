@@ -19,6 +19,7 @@ services:
   backend:
     build:
       context: ./backend
+      network: host
     container_name: raumbuchung-backend
     environment:
       PORT: 3000
