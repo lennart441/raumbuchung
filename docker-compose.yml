@@ -1,0 +1,47 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: raumbuchung-db
+    environment:
+      POSTGRES_DB: raumbuchung
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d raumbuchung"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: ./backend
+    container_name: raumbuchung-backend
+    environment:
+      PORT: 3000
+      FRONTEND_ORIGIN: http://localhost:8080
+      DATABASE_URL: postgresql://postgres:postgres@db:5432/raumbuchung
+      AUTHENTIK_ISSUER: ${AUTHENTIK_ISSUER:-https://auth.example.com/application/o/raumbuchung}
+      AUTHENTIK_AUDIENCE: ${AUTHENTIK_AUDIENCE:-raumbuchung}
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_URL: /api
+    container_name: raumbuchung-frontend
+    depends_on:
+      - backend
+    ports:
+      - "8080:80"
+
+volumes:
+  postgres_data:

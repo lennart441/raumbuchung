@@ -1,0 +1,117 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  USER
+  EXTENDED_USER
+  ADMIN
+}
+
+enum BookingStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+  BLOCKED
+}
+
+enum DecisionType {
+  APPROVE
+  REJECT
+  BLOCK
+}
+
+model User {
+  id              String          @id @default(cuid())
+  authentikSub    String          @unique
+  email           String          @unique
+  displayName     String
+  role            UserRole        @default(USER)
+  active          Boolean         @default(true)
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+  bookings        Booking[]
+  createdBlocks   RoomBlock[]
+  decisions       BookingDecision[]
+  roomBans        UserRoomBan[]
+  globalBans      UserGlobalBan[]
+}
+
+model Room {
+  id        String     @id @default(cuid())
+  name      String     @unique
+  capacity  Int        @default(1)
+  isActive  Boolean    @default(true)
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+  bookings  Booking[]
+  blocks    RoomBlock[]
+  roomBans  UserRoomBan[]
+}
+
+model RoomBlock {
+  id          String   @id @default(cuid())
+  roomId      String
+  room        Room     @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  startAt     DateTime
+  endAt       DateTime
+  reason      String
+  createdById String
+  createdBy   User     @relation(fields: [createdById], references: [id], onDelete: Restrict)
+  createdAt   DateTime @default(now())
+}
+
+model Booking {
+  id           String           @id @default(cuid())
+  roomId        String
+  room          Room             @relation(fields: [roomId], references: [id], onDelete: Restrict)
+  userId        String
+  user          User             @relation(fields: [userId], references: [id], onDelete: Restrict)
+  startAt       DateTime
+  endAt         DateTime
+  note          String?
+  status        BookingStatus    @default(PENDING)
+  isOverbooked  Boolean          @default(false)
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+  decisions     BookingDecision[]
+}
+
+model BookingDecision {
+  id          String       @id @default(cuid())
+  bookingId   String
+  booking     Booking      @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  decidedById String
+  decidedBy   User         @relation(fields: [decidedById], references: [id], onDelete: Restrict)
+  decision    DecisionType
+  reason      String?
+  decidedAt   DateTime     @default(now())
+}
+
+model UserRoomBan {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  roomId    String
+  room      Room      @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  startsAt  DateTime  @default(now())
+  endsAt    DateTime?
+  reason    String?
+  createdAt DateTime  @default(now())
+}
+
+model UserGlobalBan {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  startsAt  DateTime  @default(now())
+  endsAt    DateTime?
+  reason    String?
+  createdAt DateTime  @default(now())
+}
