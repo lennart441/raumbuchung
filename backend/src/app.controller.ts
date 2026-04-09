@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   Patch,
@@ -28,6 +29,24 @@ class CreateBookingDto {
 
   @IsDateString()
   endAt!: string;
+
+  @IsOptional()
+  @IsString()
+  note?: string;
+}
+
+class UpdateBookingDto {
+  @IsOptional()
+  @IsString()
+  roomId?: string;
+
+  @IsOptional()
+  @IsDateString()
+  startAt?: string;
+
+  @IsOptional()
+  @IsDateString()
+  endAt?: string;
 
   @IsOptional()
   @IsString()
@@ -103,6 +122,27 @@ export class AppController {
   @Get('bookings/me')
   async myBookings(@Req() req: RequestWithUser) {
     return this.appService.myBookings(req.user);
+  }
+
+  @UseGuards(AuthGuard)
+  @Patch('bookings/:id')
+  async updateBooking(
+    @Req() req: RequestWithUser,
+    @Param('id') id: string,
+    @Body() body: UpdateBookingDto,
+  ) {
+    return this.appService.updateBooking(req.user, id, {
+      roomId: body.roomId,
+      startAt: body.startAt ? new Date(body.startAt) : undefined,
+      endAt: body.endAt ? new Date(body.endAt) : undefined,
+      note: body.note,
+    });
+  }
+
+  @UseGuards(AuthGuard)
+  @Delete('bookings/:id')
+  async deleteBooking(@Req() req: RequestWithUser, @Param('id') id: string) {
+    return this.appService.deleteBooking(req.user, id);
   }
 
   @UseGuards(AuthGuard, RolesGuard)

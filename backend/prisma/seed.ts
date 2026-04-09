@@ -6,6 +6,10 @@ async function main() {
   const rooms = Array.from({ length: 10 }, (_, idx) => ({
     name: `Raum ${idx + 1}`,
     capacity: idx < 2 ? 25 : 12,
+    description:
+      idx < 2
+        ? 'Groesserer Besprechungsraum mit Konferenzausstattung.'
+        : 'Standardraum fuer Teamtermine und Einzelgespraeche.',
   }));
 
   for (const room of rooms) {

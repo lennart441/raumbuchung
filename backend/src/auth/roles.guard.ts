@@ -3,6 +3,7 @@ import { Reflector } from '@nestjs/core';
 import { UserRole } from '@prisma/client';
 import { ROLES_KEY } from './roles.decorator';
 import { AuthUser } from './request-user';
+import { resolveRoleFromClaims } from './role-resolution';
 
 @Injectable()
 export class RolesGuard implements CanActivate {
@@ -19,16 +20,10 @@ export class RolesGuard implements CanActivate {
     const user = req.user;
     if (!user) throw new ForbiddenException('Nicht eingeloggt');
 
-    const role = user.role ?? this.mapGroupsToRole(user.groups);
+    const role = resolveRoleFromClaims(user.role, user.groups);
     if (!requiredRoles.includes(role)) {
       throw new ForbiddenException('Keine Berechtigung');
     }
     return true;
-  }
-
-  private mapGroupsToRole(groups?: string[]): UserRole {
-    if ((groups ?? []).includes('admin')) return UserRole.ADMIN;
-    if ((groups ?? []).includes('extended_user')) return UserRole.EXTENDED_USER;
-    return UserRole.USER;
   }
 }

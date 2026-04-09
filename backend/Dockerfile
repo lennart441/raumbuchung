@@ -7,7 +7,7 @@ FROM node:22-alpine AS build
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
-RUN npm run prisma:generate
+RUN sh -c 'for i in 1 2 3 4 5; do npm run prisma:generate && exit 0; echo "prisma generate failed (attempt $i), retrying..."; sleep $((i*3)); done; exit 1'
 RUN npm run build
 
 FROM node:22-alpine AS runtime
