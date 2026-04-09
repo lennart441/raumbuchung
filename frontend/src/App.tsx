@@ -1,9 +1,9 @@
-import { useMemo, useState } from 'react'
+import { type PointerEvent as ReactPointerEvent, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import axios from 'axios'
 
 type Me = { id: string; displayName: string; role: 'USER' | 'EXTENDED_USER' | 'ADMIN' }
-type Room = { id: string; name: string }
+type Room = { id: string; name: string; description?: string | null }
 type Booking = {
   id: string
   startAt: string
@@ -14,6 +14,8 @@ type Booking = {
   room?: { name: string }
   user?: { displayName: string; email: string }
 }
+
+type CalendarBooking = Booking & { isMasked?: boolean }
 type Availability = {
   room: Room
   bookings: Array<{ id: string; startAt: string; endAt: string; status: string; isOverbooked: boolean }>
@@ -89,6 +91,11 @@ function bookingStatusLabel(status: string) {
   if (normalized === 'BLOCKED' || normalized === 'MAINTENANCE') return 'Blockiert'
   if (normalized === 'REJECTED') return 'Abgelehnt'
   return status
+}
+
+function displayBookingTitle(booking: Booking | CalendarBooking) {
+  const title = booking.note?.trim()
+  return title && title.length > 0 ? title : 'Termin'
 }
 
 function formatDayLabel(input: string) {
@@ -204,16 +211,21 @@ function App() {
     return filteredRooms.map((room) => {
       const dayData = availability.data?.[room.id]
       const merged = [
-        ...(dayData?.bookings ?? []).map((booking) => ({
-          id: booking.id,
-          startAt: booking.startAt,
-          endAt: booking.endAt,
-          status: booking.status,
-          isOverbooked: booking.isOverbooked,
-          room: { name: room.name },
-          user: knownBookingsById.get(booking.id)?.user,
-          note: knownBookingsById.get(booking.id)?.note,
-        })),
+        ...(dayData?.bookings ?? []).map((booking) => {
+          const knownBooking = knownBookingsById.get(booking.id)
+          const isOwnOrVisible = Boolean(knownBooking) || isAdmin
+          return {
+            id: booking.id,
+            startAt: booking.startAt,
+            endAt: booking.endAt,
+            status: isOwnOrVisible ? booking.status : 'BLOCKED',
+            isOverbooked: booking.isOverbooked,
+            room: { name: room.name },
+            user: knownBooking?.user,
+            note: isOwnOrVisible ? knownBooking?.note : 'Blockiert',
+            isMasked: !isOwnOrVisible,
+          }
+        }),
         ...(dayData?.blocks ?? []).map((block) => ({
           id: `block-${block.id}`,
           startAt: block.startAt,
@@ -224,9 +236,9 @@ function App() {
           note: 'Wartung / Block',
         })),
       ]
-      return { room, bookings: merged as Booking[] }
+      return { room, bookings: merged as CalendarBooking[] }
     })
-  }, [availability.data, filteredRooms, knownBookingsById])
+  }, [availability.data, filteredRooms, isAdmin, knownBookingsById])
 
   const selectedBooking = useMemo(() => {
     if (!selectedBookingId) return null
@@ -264,6 +276,15 @@ function App() {
     await refreshAll()
     setDetailsOpen(false)
     setEditingBookingId(null)
+  }
+
+  const deleteBooking = async () => {
+    if (!selectedBooking || selectedBooking.id.startsWith('block-')) return
+    await api.delete(`/bookings/${selectedBooking.id}`, { headers })
+    await refreshAll()
+    setDetailsOpen(false)
+    setEditingBookingId(null)
+    setSelectedBookingId('')
   }
 
   const decide = async (id: string, action: 'approve' | 'reject') => {
@@ -314,12 +335,19 @@ function App() {
     setSelectedDay(toLocalInputValue(base))
   }
 
+  const canStartTimelineSelection = (event: ReactPointerEvent<HTMLElement>) => {
+    if (event.pointerType === 'touch') return false
+    if (event.pointerType === 'mouse' && event.button !== 0) return false
+    return true
+  }
+
   if (!isLoggedIn) {
     return (
-      <main className="min-h-screen bg-slate-100 p-6">
-        <div className="mx-auto mt-16 max-w-md rounded-2xl bg-white p-6 shadow">
-          <h1 className="text-2xl font-semibold">Raumbuchung</h1>
-          <p className="mt-1 text-sm text-slate-600">MVP Login-Screen (ohne echtes Auth). Bitte Rolle auswaehlen.</p>
+      <main className="min-h-screen bg-slate-100 p-4 sm:p-6">
+        <div className="mx-auto mt-10 max-w-md rounded-2xl bg-white p-6 shadow sm:mt-16">
+          <h1 className="text-2xl font-semibold">Gemeinde Stocksee</h1>
+          <p className="mt-1 text-sm text-slate-600">Raumbuchung</p>
+          <p className="mt-2 text-xs text-slate-500">Demo-Login (ohne echtes Auth). Bitte Rolle auswaehlen.</p>
           <div className="mt-5 space-y-2">
             {(['USER', 'EXTENDED_USER', 'ADMIN'] as Me['role'][]).map((role) => (
               <button
@@ -333,8 +361,8 @@ function App() {
               </button>
             ))}
           </div>
-          <button className="mt-5 w-full rounded-lg bg-emerald-600 px-3 py-2 font-medium text-white" onClick={handleRoleLogin}>
-            Weiter zum Dashboard
+          <button className="mt-5 w-full rounded-lg bg-teal-700 px-3 py-2 font-medium text-white" onClick={handleRoleLogin}>
+            Weiter
           </button>
         </div>
       </main>
@@ -342,12 +370,12 @@ function App() {
   }
 
   return (
-    <main className="min-h-screen bg-slate-100 p-5">
+    <main className="min-h-screen overflow-x-hidden bg-slate-100 p-3 sm:p-5">
       <header className="mb-4 rounded-2xl bg-white p-4 shadow-sm ring-1 ring-slate-200/70">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h1 className="text-2xl font-semibold">EasyBook Pro</h1>
-            <p className="text-sm text-slate-600">Dashboard fuer moderne Raumbuchung</p>
+            <h1 className="text-2xl font-semibold">Gemeinde Stocksee</h1>
+            <p className="text-sm text-slate-600">Raumbuchung</p>
           </div>
           <div className="flex items-center gap-3">
             <div className="rounded-lg border border-slate-200 px-3 py-2 text-sm">
@@ -364,8 +392,36 @@ function App() {
         </div>
       </header>
 
-      <div className="grid gap-4 xl:grid-cols-[280px_1fr_360px]">
-        <aside className="space-y-4 rounded-2xl bg-white p-4 shadow-sm ring-1 ring-slate-200/70">
+      <div className="grid gap-4 2xl:grid-cols-[280px_1fr_360px]">
+        {/* Mobile/Tablet: Filter als Akkordeon */}
+        <details className="rounded-2xl bg-white p-4 shadow-sm ring-1 ring-slate-200/70 2xl:hidden">
+          <summary className="cursor-pointer select-none text-lg font-semibold">Filter</summary>
+          <div className="mt-4 space-y-4">
+            <div>
+              <label className="mb-1 block text-sm font-medium">Tag</label>
+              <input
+                type="date"
+                className="w-full rounded-lg border border-slate-300 p-2"
+                value={selectedDay.slice(0, 10)}
+                onChange={(e) => setSelectedDay(`${e.target.value}T00:00`)}
+              />
+            </div>
+            <div>
+              <label className="mb-2 block text-sm font-medium">Equipment</label>
+              <div className="space-y-2 text-sm">
+                {(['beamer', 'tv', 'whiteboard'] as Equipment[]).map((item) => (
+                  <label key={item} className="flex items-center gap-2">
+                    <input type="checkbox" checked={equipmentFilter.includes(item)} onChange={() => handleEquipmentToggle(item)} />
+                    {item}
+                  </label>
+                ))}
+              </div>
+            </div>
+          </div>
+        </details>
+
+        {/* Desktop/Wideboard: Filter links fix */}
+        <aside className="hidden space-y-4 rounded-2xl bg-white p-4 shadow-sm ring-1 ring-slate-200/70 2xl:block">
           <h2 className="text-lg font-semibold">Raum-Filter</h2>
           <div>
             <label className="mb-1 block text-sm font-medium">Tag</label>
@@ -389,8 +445,8 @@ function App() {
           </div>
         </aside>
 
-        <section className="rounded-2xl bg-white p-4 shadow-sm ring-1 ring-slate-200/70">
-          <div className="mb-3 flex items-center justify-between gap-2">
+        <section className="min-w-0 rounded-2xl bg-white p-4 shadow-sm ring-1 ring-slate-200/70">
+          <div className="mb-3 flex flex-wrap items-start justify-between gap-2">
             <div>
               <h2 className="text-lg font-semibold">Timeline (00:00 - 24:00)</h2>
               <div className="mt-1 flex items-center gap-2 text-sm text-slate-600">
@@ -403,98 +459,212 @@ function App() {
                 </button>
               </div>
             </div>
-            <div className="flex gap-2 text-xs">
+            <div className="flex flex-wrap gap-2 text-xs">
               <span className="rounded-full bg-blue-100 px-2 py-1 text-blue-700">Bestaetigt</span>
               <span className="rounded-full bg-amber-100 px-2 py-1 text-amber-700">Ausstehend</span>
               <span className="rounded-full bg-slate-200 px-2 py-1 text-slate-700">Blockiert</span>
             </div>
           </div>
 
-          <div className="mb-2 ml-44 grid grid-cols-12 text-xs text-slate-500">
-            {Array.from({ length: 13 }).map((_, idx) => (
-              <div key={idx}>{String(DAY_START_HOUR + idx * 2).padStart(2, '0')}:00</div>
-            ))}
-          </div>
-
-          <div className="space-y-3">
-            {roomCalendar.map(({ room, bookings: roomBookings }) => (
-              <div key={room.id} className="grid grid-cols-[176px_1fr] items-center gap-3">
-                <div className="rounded-lg border border-slate-200 px-3 py-2 text-sm">
-                  <div className="font-semibold">{room.name}</div>
+          <div className="max-w-full overflow-x-auto touch-pan-x">
+            <div className="min-w-[760px]">
+              {/* Kopfzeile (Raum-Spalte sticky, Zeitachse scrollt) */}
+              <div className="mb-2 grid grid-cols-[132px_1fr] sm:grid-cols-[156px_1fr]">
+                <div className="sticky left-0 z-20 bg-white pr-2">
+                  <div className="h-5" />
                 </div>
-                <div
-                  className="relative h-14 rounded-xl border border-slate-200 bg-slate-50"
-                  onMouseDown={(e) => {
-                    const target = e.target as HTMLElement
-                    if (target.closest('button')) return
-                    const rect = e.currentTarget.getBoundingClientRect()
-                    const startPxPos = e.clientX - rect.left
-                    setSelection({ roomId: room.id, startPx: startPxPos, currentPx: startPxPos, width: rect.width, active: true })
-                  }}
-                  onMouseMove={(e) => {
-                    if (!selection?.active || selection.roomId !== room.id) return
-                    const rect = e.currentTarget.getBoundingClientRect()
-                    setSelection((prev) => (prev ? { ...prev, currentPx: e.clientX - rect.left, width: rect.width } : prev))
-                  }}
-                  onMouseUp={() => {
-                    if (!selection || selection.roomId !== room.id) return
-                    openModalForSelection(room, selection.startPx, selection.currentPx, selection.width)
-                    setSelection(null)
-                  }}
-                  onMouseLeave={() => {
-                    if (!selection?.active || selection.roomId !== room.id) return
-                    openModalForSelection(room, selection.startPx, selection.currentPx, selection.width)
-                    setSelection(null)
-                  }}
-                >
-                  <div className="absolute inset-0 grid grid-cols-24">
-                    {Array.from({ length: 23 }).map((_, idx) => (
-                      <div key={idx} className="border-r border-slate-200/70" />
-                    ))}
-                  </div>
-                  {roomBookings.map((booking) => {
-                    const dayStart = dayStartFromInput(selectedDay)
-                    const startMinutes = (new Date(booking.startAt).getTime() - dayStart.getTime()) / 60000
-                    const endMinutes = (new Date(booking.endAt).getTime() - dayStart.getTime()) / 60000
-                    const clampedStart = Math.max(0, Math.min(startMinutes, TIMELINE_MINUTES))
-                    const clampedEnd = Math.max(0, Math.min(endMinutes, TIMELINE_MINUTES))
-                    const left = `${(clampedStart / TIMELINE_MINUTES) * 100}%`
-                    const width = `${Math.max(4, ((clampedEnd - clampedStart) / TIMELINE_MINUTES) * 100)}%`
-                    return (
-                      <button
-                        key={booking.id}
-                        className={`absolute top-2 h-10 rounded-xl px-2 text-xs shadow-sm ${bookingClass(booking.status)}`}
-                        style={{ left, width }}
-                        onMouseDown={(e) => e.stopPropagation()}
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          openDetails(booking, room)
-                        }}
-                        title={`Details anzeigen: ${bookingStatusLabel(booking.status)}`}
-                      >
-                        {bookingStatusLabel(booking.status)}
-                      </button>
-                    )
-                  })}
-                  {selection?.roomId === room.id && (
-                    <div
-                      className="absolute top-2 h-10 rounded-xl bg-emerald-500/30 ring-1 ring-emerald-600"
-                      style={{
-                        left: `${Math.min(selection.startPx, selection.currentPx)}px`,
-                        width: `${Math.abs(selection.currentPx - selection.startPx)}px`,
-                      }}
-                    />
-                  )}
+                <div className="grid grid-cols-12 text-xs text-slate-500">
+                  {Array.from({ length: 13 }).map((_, idx) => (
+                    <div key={idx}>{String(DAY_START_HOUR + idx * 2).padStart(2, '0')}:00</div>
+                  ))}
                 </div>
               </div>
-            ))}
+
+              <div className="space-y-3">
+                {roomCalendar.map(({ room, bookings: roomBookings }) => (
+                  <div key={room.id} className="grid grid-cols-[132px_1fr] gap-2 sm:grid-cols-[156px_1fr] sm:gap-3">
+                    <div className="sticky left-0 z-20 bg-white pr-2">
+                      <div className="rounded-lg border border-slate-200 px-3 py-2 text-sm">
+                        <div className="flex items-center gap-2">
+                          <div className="font-semibold">{room.name}</div>
+                          {room.description && (
+                            <span
+                              className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-slate-200 text-[11px] font-semibold text-slate-700"
+                              title={room.description}
+                            >
+                              i
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div
+                      className="relative h-14 rounded-xl border border-slate-200 bg-slate-50"
+                      onPointerDown={(e) => {
+                        const target = e.target as HTMLElement
+                        if (target.closest('button')) return
+                        if (!canStartTimelineSelection(e)) return
+                        ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+                        const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
+                        const startPxPos = e.clientX - rect.left
+                        setSelection({ roomId: room.id, startPx: startPxPos, currentPx: startPxPos, width: rect.width, active: true })
+                      }}
+                      onPointerMove={(e) => {
+                        if (!selection?.active || selection.roomId !== room.id) return
+                        const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
+                        setSelection((prev) => (prev ? { ...prev, currentPx: e.clientX - rect.left, width: rect.width } : prev))
+                      }}
+                      onPointerUp={(e) => {
+                        if (!selection || selection.roomId !== room.id) return
+                        try {
+                          ;(e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId)
+                        } catch {
+                          // ignore
+                        }
+                        openModalForSelection(room, selection.startPx, selection.currentPx, selection.width)
+                        setSelection(null)
+                      }}
+                      onPointerCancel={() => {
+                        if (!selection?.active || selection.roomId !== room.id) return
+                        setSelection(null)
+                      }}
+                    >
+                      <div className="absolute inset-0 grid grid-cols-24">
+                        {Array.from({ length: 23 }).map((_, idx) => (
+                          <div key={idx} className="border-r border-slate-200/70" />
+                        ))}
+                      </div>
+                      {roomBookings.map((booking) => {
+                        const dayStart = dayStartFromInput(selectedDay)
+                        const startMinutes = (new Date(booking.startAt).getTime() - dayStart.getTime()) / 60000
+                        const endMinutes = (new Date(booking.endAt).getTime() - dayStart.getTime()) / 60000
+                        const clampedStart = Math.max(0, Math.min(startMinutes, TIMELINE_MINUTES))
+                        const clampedEnd = Math.max(0, Math.min(endMinutes, TIMELINE_MINUTES))
+                        const left = `${(clampedStart / TIMELINE_MINUTES) * 100}%`
+                        const width = `${Math.max(4, ((clampedEnd - clampedStart) / TIMELINE_MINUTES) * 100)}%`
+                        const canSeePerson = isAdmin || !booking.isMasked
+                        return (
+                          <button
+                            key={booking.id}
+                            className={`absolute top-2 h-10 rounded-xl px-2 text-xs shadow-sm ${bookingClass(booking.status)}`}
+                            style={{ left, width }}
+                            onPointerDown={(e) => e.stopPropagation()}
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              openDetails(booking, room)
+                            }}
+                            title={
+                              booking.isMasked
+                                ? 'Blockiert'
+                                : `Details anzeigen: ${displayBookingTitle(booking)}${
+                                    canSeePerson && booking.user?.displayName ? ` (${booking.user.displayName})` : ''
+                                  }`
+                            }
+                          >
+                            <span className="block truncate text-left leading-tight">
+                              {booking.isMasked ? 'Blockiert' : displayBookingTitle(booking)}
+                            </span>
+                            {canSeePerson && booking.user?.displayName && (
+                              <span className="block truncate text-left text-[10px] opacity-90">{booking.user.displayName}</span>
+                            )}
+                          </button>
+                        )
+                      })}
+                      {selection?.roomId === room.id && (
+                        <div
+                          className="absolute top-2 h-10 rounded-xl bg-teal-600/25 ring-1 ring-teal-700"
+                          style={{
+                            left: `${Math.min(selection.startPx, selection.currentPx)}px`,
+                            width: `${Math.abs(selection.currentPx - selection.startPx)}px`,
+                          }}
+                        />
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
           </div>
         </section>
 
-        <aside className="space-y-4 rounded-2xl bg-white p-4 shadow-sm ring-1 ring-slate-200/70">
+        {/* Mobile/Tablet: Buchungen als Akkordeon */}
+        <details className="rounded-2xl bg-white p-4 shadow-sm ring-1 ring-slate-200/70 2xl:hidden">
+          <summary className="cursor-pointer select-none text-lg font-semibold">Buchungen</summary>
+          <div className="mt-4 space-y-4">
+            <button
+              className="w-full rounded-lg bg-teal-700 px-3 py-2 font-medium text-white"
+              onClick={() => {
+                setEditingBookingId(null)
+                setModalOpen(true)
+              }}
+              title={isExtended ? 'Erstellt sofort eine bestaetigte Buchung' : 'Sendet eine Buchungsanfrage zur Pruefung'}
+            >
+              {isExtended ? 'Direkt buchen' : 'Buchung anfragen'}
+            </button>
+            <div className="space-y-2">
+              <h3 className="text-sm font-semibold">Meine Buchungen</h3>
+              <ul className="space-y-2">
+                {(bookings.data ?? []).slice(0, 8).map((booking) => (
+                  <li key={booking.id} className="rounded-lg border border-slate-200 p-2 text-xs">
+                    <button
+                      className="w-full text-left"
+                      onClick={() => {
+                        setSelectedBookingId(booking.id)
+                        setDetailsOpen(true)
+                      }}
+                      title="Details anzeigen und ggf. bearbeiten"
+                    >
+                      <div className="font-medium">{booking.room?.name ?? 'Raum'}</div>
+                      <div>{new Date(booking.startAt).toLocaleString()}</div>
+                      <span className={`mt-1 inline-block rounded-full px-2 py-0.5 ${bookingClass(booking.status)}`}>
+                        {bookingStatusLabel(booking.status)}
+                      </span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+
+            {isAdmin && (
+              <div className="rounded-xl border border-slate-200 p-3">
+                <button
+                  className="mb-2 text-left text-sm font-semibold text-teal-800"
+                  onClick={() => setApprovalTabOpen((prev) => !prev)}
+                  title="Zeigt oder versteckt offene Genehmigungsanfragen"
+                >
+                  Genehmigungs-Tab ({pendingBookings.length})
+                </button>
+                {approvalTabOpen && (
+                  <ul className="space-y-2">
+                    {pendingBookings.map((booking) => (
+                      <li key={booking.id} className="rounded-lg border border-slate-200 p-2 text-xs">
+                        <div className="font-medium">
+                          {booking.user?.displayName} · {booking.room?.name}
+                        </div>
+                        <div className="mb-2">{new Date(booking.startAt).toLocaleString()}</div>
+                        <div className="flex gap-2">
+                          <button className="rounded bg-teal-700 px-2 py-1 text-white" onClick={() => decide(booking.id, 'approve')}>
+                            Freigeben
+                          </button>
+                          <button className="rounded bg-rose-600 px-2 py-1 text-white" onClick={() => decide(booking.id, 'reject')}>
+                            Ablehnen
+                          </button>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
+          </div>
+        </details>
+
+        {/* Desktop/Wideboard: Buchungen rechts fix */}
+        <aside className="hidden space-y-4 rounded-2xl bg-white p-4 shadow-sm ring-1 ring-slate-200/70 2xl:block">
           <h2 className="text-lg font-semibold">Schnell-Buchung</h2>
           <button
-            className="w-full rounded-lg bg-emerald-600 px-3 py-2 font-medium text-white"
+            className="w-full rounded-lg bg-teal-700 px-3 py-2 font-medium text-white"
             onClick={() => {
               setEditingBookingId(null)
               setModalOpen(true)
@@ -530,7 +700,7 @@ function App() {
           {isAdmin && (
             <div className="rounded-xl border border-slate-200 p-3">
               <button
-                className="mb-2 text-left text-sm font-semibold text-emerald-700"
+                className="mb-2 text-left text-sm font-semibold text-teal-800"
                 onClick={() => setApprovalTabOpen((prev) => !prev)}
                 title="Zeigt oder versteckt offene Genehmigungsanfragen"
               >
@@ -545,7 +715,7 @@ function App() {
                       </div>
                       <div className="mb-2">{new Date(booking.startAt).toLocaleString()}</div>
                       <div className="flex gap-2">
-                        <button className="rounded bg-emerald-600 px-2 py-1 text-white" onClick={() => decide(booking.id, 'approve')}>
+                        <button className="rounded bg-teal-700 px-2 py-1 text-white" onClick={() => decide(booking.id, 'approve')}>
                           Freigeben
                         </button>
                         <button className="rounded bg-rose-600 px-2 py-1 text-white" onClick={() => decide(booking.id, 'reject')}>
@@ -586,7 +756,7 @@ function App() {
                 <input className="w-full rounded border p-2" type="datetime-local" value={endAt} onChange={(e) => setEndAt(e.target.value)} />
               </label>
               <label className="text-sm md:col-span-2">
-                <span className="mb-1 block text-slate-700">Zweck / Notiz</span>
+                <span className="mb-1 block text-slate-700">Titel</span>
                 <input className="w-full rounded border p-2" value={note} onChange={(e) => setNote(e.target.value)} />
               </label>
             </div>
@@ -610,7 +780,7 @@ function App() {
               <button className="rounded border px-3 py-2" onClick={() => setModalOpen(false)}>
                 Abbrechen
               </button>
-              <button className="rounded bg-emerald-600 px-3 py-2 text-white" onClick={createBooking}>
+              <button className="rounded bg-teal-700 px-3 py-2 text-white" onClick={createBooking}>
                 {isExtended ? 'Direkt buchen' : 'Anfrage senden'}
               </button>
             </div>
@@ -624,6 +794,9 @@ function App() {
             <h3 className="text-lg font-semibold">Buchungsdetails</h3>
             <div className="mt-3 space-y-2 text-sm">
               <div>
+                <strong>Titel:</strong> {displayBookingTitle(selectedBooking)}
+              </div>
+              <div>
                 <strong>Status:</strong> {bookingStatusLabel(selectedBooking.status)}
               </div>
               <div>
@@ -635,9 +808,9 @@ function App() {
               <div>
                 <strong>Ende:</strong> {new Date(selectedBooking.endAt).toLocaleString()}
               </div>
-              {isAdmin && (
+              {(isAdmin || canEditSelected) && selectedBooking.user?.displayName && (
                 <div>
-                  <strong>Bucher:</strong> {selectedBooking.user?.displayName ?? 'Unbekannt'}
+                  <strong>Person:</strong> {selectedBooking.user.displayName}
                 </div>
               )}
               {selectedBooking.note && (
@@ -673,8 +846,8 @@ function App() {
                     </select>
                     <input className="rounded border p-2" type="datetime-local" value={startAt} onChange={(e) => setStartAt(e.target.value)} />
                     <input className="rounded border p-2" type="datetime-local" value={endAt} onChange={(e) => setEndAt(e.target.value)} />
-                    <input className="rounded border p-2 md:col-span-2" value={note} onChange={(e) => setNote(e.target.value)} placeholder="Zweck / Notiz" />
-                    <button className="rounded bg-emerald-600 px-3 py-2 text-white md:col-span-2" onClick={saveBookingEdits}>
+                    <input className="rounded border p-2 md:col-span-2" value={note} onChange={(e) => setNote(e.target.value)} placeholder="Titel" />
+                    <button className="rounded bg-teal-700 px-3 py-2 text-white md:col-span-2" onClick={saveBookingEdits}>
                       Aenderungen speichern
                     </button>
                   </div>
@@ -682,7 +855,12 @@ function App() {
               </div>
             )}
 
-            <div className="mt-4 flex justify-end">
+            <div className="mt-4 flex justify-between gap-2">
+              {canEditSelected && (
+                <button className="rounded bg-rose-600 px-3 py-2 text-white" onClick={deleteBooking}>
+                  Termin loeschen
+                </button>
+              )}
               <button className="rounded border px-3 py-2" onClick={() => setDetailsOpen(false)}>
                 Schliessen
               </button>

@@ -1,9 +1,11 @@
 {
-  "name": "Raumbuchung",
-  "short_name": "Raumbuchung",
+  "name": "Gemeinde Stocksee · Raumbuchung",
+  "short_name": "Stocksee",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#f8fafc",
-  "theme_color": "#0f172a",
-  "icons": []
+  "theme_color": "#0f766e",
+  "icons": [
+    { "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
 }

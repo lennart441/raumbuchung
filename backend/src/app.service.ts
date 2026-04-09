@@ -7,6 +7,7 @@ import {
 import { BookingStatus, DecisionType, Prisma, UserRole } from '@prisma/client';
 import { PrismaService } from './prisma.service';
 import { AuthUser } from './auth/request-user';
+import { resolveRoleFromClaims } from './auth/role-resolution';
 
 type CreateBookingInput = {
   roomId: string;
@@ -215,6 +216,21 @@ export class AppService {
     });
   }
 
+  async deleteBooking(identity: AuthUser, bookingId: string) {
+    const actor = await this.ensureUser(identity);
+    const existing = await this.prisma.booking.findUnique({
+      where: { id: bookingId },
+    });
+    if (!existing) throw new NotFoundException('Buchung nicht gefunden');
+
+    if (actor.role !== UserRole.ADMIN && existing.userId !== actor.id) {
+      throw new ForbiddenException('Keine Berechtigung fuer diese Buchung');
+    }
+
+    await this.prisma.booking.delete({ where: { id: bookingId } });
+    return { ok: true };
+  }
+
   async adminBookings(status?: BookingStatus) {
     return this.prisma.booking.findMany({
       where: status ? { status } : undefined,
@@ -286,12 +302,7 @@ export class AppService {
   }
 
   private resolveRole(identity: AuthUser): UserRole {
-    const groups = identity.groups ?? [];
-    if (groups.includes('admin')) return UserRole.ADMIN;
-    if (groups.includes('extended_user')) return UserRole.EXTENDED_USER;
-    if (identity.role === 'ADMIN') return UserRole.ADMIN;
-    if (identity.role === 'EXTENDED_USER') return UserRole.EXTENDED_USER;
-    return UserRole.USER;
+    return resolveRoleFromClaims(identity.role, identity.groups);
   }
 
   private async assertUserCanBook(userId: string, roomId: string) {

@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   Patch,
@@ -136,6 +137,12 @@ export class AppController {
       endAt: body.endAt ? new Date(body.endAt) : undefined,
       note: body.note,
     });
+  }
+
+  @UseGuards(AuthGuard)
+  @Delete('bookings/:id')
+  async deleteBooking(@Req() req: RequestWithUser, @Param('id') id: string) {
+    return this.appService.deleteBooking(req.user, id);
   }
 
   @UseGuards(AuthGuard, RolesGuard)
