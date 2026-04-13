@@ -167,6 +167,7 @@ function App() {
   const [recurrenceUntil, setRecurrenceUntil] = useState('')
   const [approvalTabOpen, setApprovalTabOpen] = useState(true)
   const [selectedBookingId, setSelectedBookingId] = useState('')
+  const [authError, setAuthError] = useState<string | null>(null)
 
   const oidcManager = useMemo(() => {
     if (!isOidcMode) return null
@@ -192,12 +193,17 @@ function App() {
     const search = new URLSearchParams(window.location.search)
     const hasCallbackParams = search.has('code') && search.has('state')
     const bootstrap = async () => {
-      if (hasCallbackParams) {
-        await oidcManager.signinRedirectCallback()
-        window.history.replaceState({}, document.title, window.location.pathname)
+      try {
+        if (hasCallbackParams) {
+          await oidcManager.signinRedirectCallback()
+          window.history.replaceState({}, document.title, window.location.pathname)
+        }
+        const user = await oidcManager.getUser()
+        setOidcToken(user?.access_token ?? null)
+        setAuthError(null)
+      } catch (error) {
+        setAuthError(error instanceof Error ? error.message : 'OIDC Anmeldung fehlgeschlagen')
       }
-      const user = await oidcManager.getUser()
-      setOidcToken(user?.access_token ?? null)
     }
     void bootstrap()
   }, [oidcManager])
@@ -433,8 +439,14 @@ function App() {
           {isOidcMode ? (
             <>
               <p className="mt-2 text-xs text-slate-500">Anmeldung ueber Authentik (OIDC/PKCE).</p>
+              {!oidcManager && (
+                <p className="mt-2 text-xs text-rose-700">
+                  OIDC ist aktiv, aber `VITE_AUTHENTIK_*` ist unvollstaendig konfiguriert.
+                </p>
+              )}
+              {authError && <p className="mt-2 text-xs text-rose-700">{authError}</p>}
               <button className="mt-5 w-full rounded-lg bg-teal-700 px-3 py-2 font-medium text-white" onClick={handleOidcLogin}>
-                Mit Authentik anmelden
+                Mit Gemeinde Stocksee Konto anmelden
               </button>
             </>
           ) : (

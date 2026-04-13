@@ -28,6 +28,8 @@ services:
       AUTH_MODE: ${AUTH_MODE:-dev}
       AUTHENTIK_ISSUER: ${AUTHENTIK_ISSUER:-https://auth.example.com/application/o/raumbuchung}
       AUTHENTIK_AUDIENCE: ${AUTHENTIK_AUDIENCE:-raumbuchung}
+      AUTHENTIK_USERINFO_URL: ${AUTHENTIK_USERINFO_URL:-https://auth.example.com/application/o/raumbuchung/userinfo/}
+      AUTHENTIK_ENABLE_USERINFO_FALLBACK: ${AUTHENTIK_ENABLE_USERINFO_FALLBACK:-true}
       MAIL_ENABLED: ${MAIL_ENABLED:-false}
       MAIL_HOST: ${MAIL_HOST:-mail.example.com}
       MAIL_PORT: ${MAIL_PORT:-587}
@@ -47,6 +49,12 @@ services:
       context: ./frontend
       args:
         VITE_API_URL: /api
+        VITE_AUTH_MODE: ${VITE_AUTH_MODE:-oidc}
+        VITE_AUTHENTIK_ISSUER: ${VITE_AUTHENTIK_ISSUER:-https://auth.example.com/application/o/raumbuchung}
+        VITE_AUTHENTIK_CLIENT_ID: ${VITE_AUTHENTIK_CLIENT_ID:-raumbuchung-frontend}
+        VITE_AUTHENTIK_REDIRECT_URI: ${VITE_AUTHENTIK_REDIRECT_URI:-http://localhost:8080}
+        VITE_AUTHENTIK_POST_LOGOUT_REDIRECT_URI: ${VITE_AUTHENTIK_POST_LOGOUT_REDIRECT_URI:-http://localhost:8080}
+        VITE_AUTHENTIK_SCOPE: ${VITE_AUTHENTIK_SCOPE:-openid profile email phone}
     container_name: raumbuchung-frontend
     depends_on:
       - backend

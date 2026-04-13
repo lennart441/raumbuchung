@@ -286,7 +286,25 @@ export class AppService {
   async adminBookings(status?: BookingStatus) {
     return this.prisma.booking.findMany({
       where: status ? { status } : undefined,
-      include: { room: true, user: true, decisions: true },
+      include: {
+        room: true,
+        decisions: true,
+        user: {
+          select: {
+            id: true,
+            email: true,
+            displayName: true,
+            phone: true,
+            birthDate: true,
+            street: true,
+            houseNumber: true,
+            postalCode: true,
+            city: true,
+            role: true,
+            active: true,
+          },
+        },
+      },
       orderBy: { createdAt: 'desc' },
     });
   }

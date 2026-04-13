@@ -9,7 +9,7 @@
 ## Docker Start (nativ in Containern)
 1. Optional `.env` für Compose anlegen:
    - `cp .env.example .env`
-   - Werte für `AUTHENTIK_ISSUER`, `AUTHENTIK_AUDIENCE` und ggf. Mailcow SMTP (`MAIL_*`) setzen
+   - Werte für `AUTHENTIK_ISSUER`, `AUTHENTIK_AUDIENCE`, `VITE_AUTHENTIK_CLIENT_ID`, `VITE_AUTHENTIK_REDIRECT_URI` und ggf. Mailcow SMTP (`MAIL_*`) setzen
 2. Starten:
    - `docker compose up --build -d`
 3. Aufrufen:
@@ -28,8 +28,15 @@ Beim Backend-Start werden Migrationen automatisch ausgeführt und Seed-Daten ang
 - Pflichtwerte fuer OIDC:
   - `AUTHENTIK_ISSUER`
   - `AUTHENTIK_AUDIENCE`
+- Pflichtwerte fuer Frontend OIDC:
+  - `VITE_AUTH_MODE=oidc`
+  - `VITE_AUTHENTIK_ISSUER`
+  - `VITE_AUTHENTIK_CLIENT_ID`
+  - `VITE_AUTHENTIK_REDIRECT_URI`
 - Optional:
   - `AUTHENTIK_JWKS_URL` (ueberschreibt automatisch abgeleitete URL `${AUTHENTIK_ISSUER}/jwks/`)
+  - `AUTHENTIK_USERINFO_URL` (Default `${AUTHENTIK_ISSUER}/userinfo/`)
+  - `AUTHENTIK_ENABLE_USERINFO_FALLBACK` (Default `true`)
   - `AUTH_JWKS_TIMEOUT_MS` (Default 5000)
   - `AUTH_CLOCK_TOLERANCE_SEC` (Default 5)
 
