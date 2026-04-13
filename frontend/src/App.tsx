@@ -1,8 +1,20 @@
-import { type PointerEvent as ReactPointerEvent, useMemo, useState } from 'react'
+import { type PointerEvent as ReactPointerEvent, useEffect, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import axios from 'axios'
+import { UserManager, WebStorageStateStore } from 'oidc-client-ts'
 
-type Me = { id: string; displayName: string; role: 'USER' | 'EXTENDED_USER' | 'ADMIN' }
+type Me = {
+  id: string
+  displayName: string
+  email: string
+  role: 'USER' | 'EXTENDED_USER' | 'ADMIN'
+  phone?: string | null
+  birthDate?: string | null
+  street?: string | null
+  houseNumber?: string | null
+  postalCode?: string | null
+  city?: string | null
+}
 type Room = { id: string; name: string; description?: string | null }
 type Booking = {
   id: string
@@ -12,7 +24,16 @@ type Booking = {
   isOverbooked: boolean
   note?: string
   room?: { name: string }
-  user?: { displayName: string; email: string }
+  user?: {
+    displayName: string
+    email: string
+    phone?: string | null
+    birthDate?: string | null
+    street?: string | null
+    houseNumber?: string | null
+    postalCode?: string | null
+    city?: string | null
+  }
 }
 
 type CalendarBooking = Booking & { isMasked?: boolean }
@@ -25,6 +46,9 @@ type Availability = {
 const api = axios.create({
   baseURL: import.meta.env.VITE_API_URL ?? 'http://localhost:3000/api',
 })
+
+const authMode = (import.meta.env.VITE_AUTH_MODE ?? 'oidc').toLowerCase()
+const isOidcMode = authMode === 'oidc'
 
 type Equipment = 'beamer' | 'tv' | 'whiteboard'
 type Recurrence = 'DAILY' | 'WEEKLY' | 'MONTHLY'
@@ -108,9 +132,17 @@ function formatDayLabel(input: string) {
   }).format(date)
 }
 
+function formatBirthDate(input?: string | null) {
+  if (!input) return 'Nicht hinterlegt'
+  const date = new Date(input)
+  if (Number.isNaN(date.getTime())) return input
+  return date.toLocaleDateString('de-DE')
+}
+
 function App() {
   const [selectedRole, setSelectedRole] = useState<Me['role']>('USER')
-  const [isLoggedIn, setIsLoggedIn] = useState(false)
+  const [isDevLoggedIn, setIsDevLoggedIn] = useState(false)
+  const [oidcToken, setOidcToken] = useState<string | null>(null)
 
   const [devUser, setDevUser] = useState('mvp-user')
   const [devRole, setDevRole] = useState<Me['role']>('USER')
@@ -136,10 +168,46 @@ function App() {
   const [approvalTabOpen, setApprovalTabOpen] = useState(true)
   const [selectedBookingId, setSelectedBookingId] = useState('')
 
-  const headers = useMemo(
-    () => ({ 'x-dev-user': devUser, 'x-dev-role': devRole }),
-    [devRole, devUser],
-  )
+  const oidcManager = useMemo(() => {
+    if (!isOidcMode) return null
+    const authority = import.meta.env.VITE_AUTHENTIK_ISSUER as string | undefined
+    const clientId = import.meta.env.VITE_AUTHENTIK_CLIENT_ID as string | undefined
+    const redirectUri = import.meta.env.VITE_AUTHENTIK_REDIRECT_URI as string | undefined
+    if (!authority || !clientId || !redirectUri) return null
+    return new UserManager({
+      authority,
+      client_id: clientId,
+      redirect_uri: redirectUri,
+      post_logout_redirect_uri:
+        (import.meta.env.VITE_AUTHENTIK_POST_LOGOUT_REDIRECT_URI as string | undefined) ??
+        window.location.origin,
+      response_type: 'code',
+      scope: (import.meta.env.VITE_AUTHENTIK_SCOPE as string | undefined) ?? 'openid profile email',
+      userStore: new WebStorageStateStore({ store: window.localStorage }),
+    })
+  }, [])
+
+  useEffect(() => {
+    if (!isOidcMode || !oidcManager) return
+    const search = new URLSearchParams(window.location.search)
+    const hasCallbackParams = search.has('code') && search.has('state')
+    const bootstrap = async () => {
+      if (hasCallbackParams) {
+        await oidcManager.signinRedirectCallback()
+        window.history.replaceState({}, document.title, window.location.pathname)
+      }
+      const user = await oidcManager.getUser()
+      setOidcToken(user?.access_token ?? null)
+    }
+    void bootstrap()
+  }, [oidcManager])
+
+  const isLoggedIn = isOidcMode ? Boolean(oidcToken) : isDevLoggedIn
+
+  const headers = useMemo(() => {
+    if (isOidcMode && oidcToken) return { authorization: `Bearer ${oidcToken}` }
+    return { 'x-dev-user': devUser, 'x-dev-role': devRole }
+  }, [devRole, devUser, oidcToken])
 
   const me = useQuery({
     queryKey: ['me', headers],
@@ -295,7 +363,22 @@ function App() {
   const handleRoleLogin = () => {
     setDevRole(selectedRole)
     setDevUser(selectedRole === 'ADMIN' ? 'mvp-admin' : selectedRole === 'EXTENDED_USER' ? 'mvp-power-user' : 'mvp-user')
-    setIsLoggedIn(true)
+    setIsDevLoggedIn(true)
+  }
+
+  const handleOidcLogin = async () => {
+    if (!oidcManager) return
+    await oidcManager.signinRedirect()
+  }
+
+  const handleLogout = async () => {
+    if (isOidcMode && oidcManager) {
+      await oidcManager.removeUser()
+      setOidcToken(null)
+      await oidcManager.signoutRedirect()
+      return
+    }
+    setIsDevLoggedIn(false)
   }
 
   const handleEquipmentToggle = (equipment: Equipment) => {
@@ -347,23 +430,34 @@ function App() {
         <div className="mx-auto mt-10 max-w-md rounded-2xl bg-white p-6 shadow sm:mt-16">
           <h1 className="text-2xl font-semibold">Gemeinde Stocksee</h1>
           <p className="mt-1 text-sm text-slate-600">Raumbuchung</p>
-          <p className="mt-2 text-xs text-slate-500">Demo-Login (ohne echtes Auth). Bitte Rolle auswaehlen.</p>
-          <div className="mt-5 space-y-2">
-            {(['USER', 'EXTENDED_USER', 'ADMIN'] as Me['role'][]).map((role) => (
-              <button
-                key={role}
-                onClick={() => setSelectedRole(role)}
-                className={`w-full rounded-lg border px-3 py-2 text-left ${
-                  selectedRole === role ? 'border-slate-900 bg-slate-900 text-white' : 'border-slate-200'
-                }`}
-              >
-                {roleLabels[role]}
+          {isOidcMode ? (
+            <>
+              <p className="mt-2 text-xs text-slate-500">Anmeldung ueber Authentik (OIDC/PKCE).</p>
+              <button className="mt-5 w-full rounded-lg bg-teal-700 px-3 py-2 font-medium text-white" onClick={handleOidcLogin}>
+                Mit Authentik anmelden
               </button>
-            ))}
-          </div>
-          <button className="mt-5 w-full rounded-lg bg-teal-700 px-3 py-2 font-medium text-white" onClick={handleRoleLogin}>
-            Weiter
-          </button>
+            </>
+          ) : (
+            <>
+              <p className="mt-2 text-xs text-slate-500">Demo-Login (ohne echtes Auth). Bitte Rolle auswaehlen.</p>
+              <div className="mt-5 space-y-2">
+                {(['USER', 'EXTENDED_USER', 'ADMIN'] as Me['role'][]).map((role) => (
+                  <button
+                    key={role}
+                    onClick={() => setSelectedRole(role)}
+                    className={`w-full rounded-lg border px-3 py-2 text-left ${
+                      selectedRole === role ? 'border-slate-900 bg-slate-900 text-white' : 'border-slate-200'
+                    }`}
+                  >
+                    {roleLabels[role]}
+                  </button>
+                ))}
+              </div>
+              <button className="mt-5 w-full rounded-lg bg-teal-700 px-3 py-2 font-medium text-white" onClick={handleRoleLogin}>
+                Weiter
+              </button>
+            </>
+          )}
         </div>
       </main>
     )
@@ -379,11 +473,11 @@ function App() {
           </div>
           <div className="flex items-center gap-3">
             <div className="rounded-lg border border-slate-200 px-3 py-2 text-sm">
-              {me.data?.displayName ?? devUser} · <strong>{roleLabels[devRole]}</strong>
+              {me.data?.displayName ?? devUser} · <strong>{roleLabels[me.data?.role ?? devRole]}</strong>
             </div>
             <button
               className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
-              onClick={() => setIsLoggedIn(false)}
+              onClick={handleLogout}
               title="Aktuelle Sitzung beenden und zum Login zurueckkehren"
             >
               Abmelden
@@ -391,6 +485,33 @@ function App() {
           </div>
         </div>
       </header>
+
+      <section className="mb-4 rounded-2xl bg-white p-4 shadow-sm ring-1 ring-slate-200/70">
+        <h2 className="text-lg font-semibold">Mein Profil (readonly)</h2>
+        <div className="mt-2 grid gap-2 text-sm sm:grid-cols-2 lg:grid-cols-3">
+          <div>
+            <strong>Name:</strong> {me.data?.displayName ?? '-'}
+          </div>
+          <div>
+            <strong>E-Mail:</strong> {me.data?.email ?? '-'}
+          </div>
+          <div>
+            <strong>Telefon:</strong> {me.data?.phone ?? 'Nicht hinterlegt'}
+          </div>
+          <div>
+            <strong>Strasse:</strong> {me.data?.street ?? 'Nicht hinterlegt'}
+          </div>
+          <div>
+            <strong>Hausnummer:</strong> {me.data?.houseNumber ?? 'Nicht hinterlegt'}
+          </div>
+          <div>
+            <strong>PLZ / Stadt:</strong> {me.data?.postalCode ?? '-'} {me.data?.city ?? ''}
+          </div>
+          <div>
+            <strong>Geburtsdatum:</strong> {formatBirthDate(me.data?.birthDate)}
+          </div>
+        </div>
+      </section>
 
       <div className="grid gap-4 2xl:grid-cols-[280px_1fr_360px]">
         {/* Mobile/Tablet: Filter als Akkordeon */}
@@ -812,6 +933,26 @@ function App() {
                 <div>
                   <strong>Person:</strong> {selectedBooking.user.displayName}
                 </div>
+              )}
+              {isAdmin && selectedBooking.user && (
+                <>
+                  <div>
+                    <strong>Mail:</strong> {selectedBooking.user.email}
+                  </div>
+                  <div>
+                    <strong>Telefon:</strong> {selectedBooking.user.phone ?? 'Nicht hinterlegt'}
+                  </div>
+                  <div>
+                    <strong>Strasse:</strong> {selectedBooking.user.street ?? 'Nicht hinterlegt'}{' '}
+                    {selectedBooking.user.houseNumber ?? ''}
+                  </div>
+                  <div>
+                    <strong>PLZ / Stadt:</strong> {selectedBooking.user.postalCode ?? '-'} {selectedBooking.user.city ?? ''}
+                  </div>
+                  <div>
+                    <strong>Geburtsdatum:</strong> {formatBirthDate(selectedBooking.user.birthDate)}
+                  </div>
+                </>
               )}
               {selectedBooking.note && (
                 <div>

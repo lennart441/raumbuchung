@@ -1,22 +1,35 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
+import { AuthGuard } from './auth/auth.guard';
+import { RolesGuard } from './auth/roles.guard';
+
+jest.mock('jose', () => ({
+  createRemoteJWKSet: jest.fn(),
+  jwtVerify: jest.fn(),
+}));
 
 describe('AppController', () => {
   let appController: AppController;
+  const appServiceMock = {
+    getHealth: jest.fn(() => ({ ok: true })),
+  };
 
   beforeEach(async () => {
-    const app: TestingModule = await Test.createTestingModule({
+    const moduleBuilder = Test.createTestingModule({
       controllers: [AppController],
-      providers: [AppService],
-    }).compile();
+      providers: [{ provide: AppService, useValue: appServiceMock }],
+    });
+    moduleBuilder.overrideGuard(AuthGuard).useValue({ canActivate: () => true });
+    moduleBuilder.overrideGuard(RolesGuard).useValue({ canActivate: () => true });
+    const app: TestingModule = await moduleBuilder.compile();
 
     appController = app.get<AppController>(AppController);
   });
 
   describe('root', () => {
-    it('should return "Hello World!"', () => {
-      expect(appController.getHello()).toBe('Hello World!');
+    it('should return health object', () => {
+      expect(appController.getHealth()).toEqual({ ok: true });
     });
   });
 });

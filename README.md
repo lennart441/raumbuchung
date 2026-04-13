@@ -9,7 +9,7 @@
 ## Docker Start (nativ in Containern)
 1. Optional `.env` für Compose anlegen:
    - `cp .env.example .env`
-   - Werte für `AUTHENTIK_ISSUER` und `AUTHENTIK_AUDIENCE` setzen
+   - Werte für `AUTHENTIK_ISSUER`, `AUTHENTIK_AUDIENCE` und ggf. Mailcow SMTP (`MAIL_*`) setzen
 2. Starten:
    - `docker compose up --build -d`
 3. Aufrufen:
@@ -44,6 +44,18 @@ Beim Backend-Start werden Migrationen automatisch ausgeführt und Seed-Daten ang
 - `USER`: Buchung immer `PENDING`
 - `EXTENDED_USER`: konfliktfreie Buchung direkt `APPROVED`
 - `ADMIN`: kann freigeben, ablehnen, nachträglich blocken, Raum/User sperren
+
+## E-Mail Benachrichtigungen (Mailcow SMTP)
+- Aktivierung über `MAIL_ENABLED=true`
+- SMTP Variablen:
+  - `MAIL_HOST`, `MAIL_PORT`, `MAIL_SECURE`
+  - `MAIL_USERNAME`, `MAIL_PASSWORD`
+  - `MAIL_FROM`, `MAIL_APP_URL`
+- Versandregeln:
+  - Bei neuer Buchung: Nutzer bekommt Anfrage- oder Sofort-Bestätigung (rollenabhängig)
+  - Bei Admin-Freigabe: Nutzer bekommt Bestätigung
+  - Bei Admin-Ablehnung oder Sperrung: Nutzer bekommt Absage
+  - Bei Admin-Änderung oder Löschung: Nutzer bekommt Änderungs-/Löschhinweis
 
 ## Wichtige Endpunkte
 - `POST /api/bookings`

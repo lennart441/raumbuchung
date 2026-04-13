@@ -6,7 +6,10 @@ const roleMap: Record<string, UserRole> = {
   USER: UserRole.USER,
 };
 
-export function resolveRoleFromClaims(role?: string, groups?: string[]): UserRole {
+export function resolveRoleFromClaims(
+  role?: string,
+  groups?: string[],
+): UserRole {
   const normalizedRole = role?.toUpperCase();
   if (normalizedRole && roleMap[normalizedRole]) {
     return roleMap[normalizedRole];

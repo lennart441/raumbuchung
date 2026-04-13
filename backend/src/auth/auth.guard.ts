@@ -1,9 +1,16 @@
-import { CanActivate, ExecutionContext, Injectable, Logger, UnauthorizedException } from '@nestjs/common';
+import {
+  CanActivate,
+  ExecutionContext,
+  Injectable,
+  Logger,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { createRemoteJWKSet, jwtVerify, JWTPayload } from 'jose';
 import { Request } from 'express';
 import { AuthUser } from './request-user';
 import { resolveRoleFromClaims } from './role-resolution';
+import { AuthentikProfileService } from './authentik-profile.service';
 
 type RequestWithUser = Request & { user?: AuthUser };
 type AuthMode = 'dev' | 'oidc';
@@ -14,7 +21,10 @@ export class AuthGuard implements CanActivate {
   private cachedJwksUrl?: string;
   private cachedJwks?: ReturnType<typeof createRemoteJWKSet>;
 
-  constructor(private readonly config: ConfigService) {}
+  constructor(
+    private readonly config: ConfigService,
+    private readonly authentikProfileService: AuthentikProfileService,
+  ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const req = context.switchToHttp().getRequest<RequestWithUser>();
@@ -35,7 +45,9 @@ export class AuthGuard implements CanActivate {
 
     if (mode === 'oidc' && devHeader && !authHeader) {
       this.logAuth('dev-header-rejected', req);
-      throw new UnauthorizedException('Dev-Header sind im OIDC-Modus deaktiviert');
+      throw new UnauthorizedException(
+        'Dev-Header sind im OIDC-Modus deaktiviert',
+      );
     }
 
     const token = authHeader?.replace(/^Bearer\s+/i, '');
@@ -54,8 +66,12 @@ export class AuthGuard implements CanActivate {
     const jwks = this.getJwks(issuer);
     const clockTolerance = this.getClockToleranceSeconds();
     try {
-      const result = await jwtVerify(token, jwks, { issuer, audience, clockTolerance });
-      req.user = this.toAuthUser(result.payload);
+      const result = await jwtVerify(token, jwks, {
+        issuer,
+        audience,
+        clockTolerance,
+      });
+      req.user = await this.toAuthUser(result.payload, token, issuer);
       this.logAuth('oidc-auth-success', req, req.user.sub);
       return true;
     } catch (error: unknown) {
@@ -65,8 +81,12 @@ export class AuthGuard implements CanActivate {
     }
   }
 
-  private toAuthUser(payload: JWTPayload): AuthUser {
-    if (!payload.sub || !payload.email) {
+  private async toAuthUser(
+    payload: JWTPayload,
+    accessToken: string,
+    issuer: string,
+  ): Promise<AuthUser> {
+    if (!payload.sub || typeof payload.email !== 'string') {
       throw new UnauthorizedException('Token enthält keine user claims');
     }
     const groupsRaw = payload.groups;
@@ -78,13 +98,28 @@ export class AuthGuard implements CanActivate {
         ? payload.name
         : typeof payload.preferred_username === 'string'
           ? payload.preferred_username
-          : String(payload.email);
+          : payload.email;
+    const fromClaims = this.extractProfileClaims(payload);
+    const fromUserInfo =
+      this.shouldFetchUserInfoProfile(fromClaims) &&
+      this.isUserInfoFallbackEnabled()
+        ? await this.authentikProfileService.fetchProfile(accessToken, issuer)
+        : undefined;
+
     return {
       sub: payload.sub,
-      email: String(payload.email),
+      email: payload.email,
       name,
+      phone: fromClaims.phone ?? fromUserInfo?.phone,
+      birthDate: fromClaims.birthDate ?? fromUserInfo?.birthDate,
+      street: fromClaims.street ?? fromUserInfo?.street,
+      houseNumber: fromClaims.houseNumber ?? fromUserInfo?.houseNumber,
+      postalCode: fromClaims.postalCode ?? fromUserInfo?.postalCode,
+      city: fromClaims.city ?? fromUserInfo?.city,
       groups,
-      role: this.mapRoleClaim(typeof payload.role === 'string' ? payload.role : undefined),
+      role: this.mapRoleClaim(
+        typeof payload.role === 'string' ? payload.role : undefined,
+      ),
     };
   }
 
@@ -112,13 +147,93 @@ export class AuthGuard implements CanActivate {
   }
 
   private getJwksTimeoutMs(): number {
-    const raw = Number(this.config.get<string>('AUTH_JWKS_TIMEOUT_MS') ?? '5000');
+    const raw = Number(
+      this.config.get<string>('AUTH_JWKS_TIMEOUT_MS') ?? '5000',
+    );
     return Number.isFinite(raw) && raw > 0 ? raw : 5000;
   }
 
   private getClockToleranceSeconds(): number {
-    const raw = Number(this.config.get<string>('AUTH_CLOCK_TOLERANCE_SEC') ?? '5');
+    const raw = Number(
+      this.config.get<string>('AUTH_CLOCK_TOLERANCE_SEC') ?? '5',
+    );
     return Number.isFinite(raw) && raw >= 0 ? raw : 5;
+  }
+
+  private isUserInfoFallbackEnabled(): boolean {
+    const raw = this.config.get<string>('AUTHENTIK_ENABLE_USERINFO_FALLBACK');
+    if (!raw) return true;
+    return raw.toLowerCase() === 'true';
+  }
+
+  private shouldFetchUserInfoProfile(profile: {
+    phone?: string;
+    birthDate?: string;
+    street?: string;
+    houseNumber?: string;
+    postalCode?: string;
+    city?: string;
+  }) {
+    return (
+      !profile.phone ||
+      !profile.birthDate ||
+      !profile.street ||
+      !profile.houseNumber ||
+      !profile.postalCode ||
+      !profile.city
+    );
+  }
+
+  private extractProfileClaims(payload: JWTPayload) {
+    const address =
+      payload.address && typeof payload.address === 'object'
+        ? (payload.address as Record<string, unknown>)
+        : undefined;
+    const streetAddress =
+      this.pickString(payload, ['street_address']) ??
+      this.pickString(address, ['street_address']);
+    const parsedAddress = this.splitStreetAndHouseNumber(streetAddress);
+    return {
+      phone: this.pickString(payload, ['phone_number', 'phone']),
+      birthDate: this.pickString(payload, ['birthdate']),
+      street:
+        parsedAddress.street ??
+        this.pickString(payload, ['street']) ??
+        this.pickString(address, ['street']),
+      houseNumber:
+        parsedAddress.houseNumber ??
+        this.pickString(payload, ['house_number']) ??
+        this.pickString(address, ['house_number']),
+      postalCode:
+        this.pickString(payload, ['postal_code']) ??
+        this.pickString(address, ['postal_code']),
+      city:
+        this.pickString(payload, ['city', 'locality']) ??
+        this.pickString(address, ['city', 'locality']),
+    };
+  }
+
+  private pickString(source: Record<string, unknown> | undefined, keys: string[]) {
+    if (!source) return undefined;
+    for (const key of keys) {
+      const value = source[key];
+      if (typeof value === 'string' && value.trim().length > 0) {
+        return value.trim();
+      }
+    }
+    return undefined;
+  }
+
+  private splitStreetAndHouseNumber(streetAddress?: string) {
+    if (!streetAddress) return { street: undefined, houseNumber: undefined };
+    const normalized = streetAddress.trim();
+    if (!normalized) return { street: undefined, houseNumber: undefined };
+    const match = normalized.match(/^(.*?)[,\s]+(\d+[a-zA-Z\-\/]*)$/);
+    if (!match) return { street: normalized, houseNumber: undefined };
+    return {
+      street: match[1]?.trim() || undefined,
+      houseNumber: match[2]?.trim() || undefined,
+    };
   }
 
   private mapRoleClaim(role?: string): AuthUser['role'] | undefined {
@@ -132,13 +247,20 @@ export class AuthGuard implements CanActivate {
   private mapTokenError(error: unknown): string {
     if (error instanceof Error) {
       if (error.name === 'JWTExpired') return 'Token ist abgelaufen';
-      if (error.name === 'JWTClaimValidationFailed') return 'Token Claim Validierung fehlgeschlagen';
-      if (error.name === 'JWSSignatureVerificationFailed') return 'Token Signatur ungueltig';
+      if (error.name === 'JWTClaimValidationFailed')
+        return 'Token Claim Validierung fehlgeschlagen';
+      if (error.name === 'JWSSignatureVerificationFailed')
+        return 'Token Signatur ungueltig';
     }
     return 'Ungueltiger Bearer Token';
   }
 
-  private logAuth(event: string, req: RequestWithUser, sub?: string, reason?: string) {
+  private logAuth(
+    event: string,
+    req: RequestWithUser,
+    sub?: string,
+    reason?: string,
+  ) {
     this.logger.log(
       JSON.stringify({
         event,

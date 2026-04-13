@@ -32,6 +32,12 @@ model User {
   authentikSub    String          @unique
   email           String          @unique
   displayName     String
+  phone           String?
+  birthDate       DateTime?
+  street          String?
+  houseNumber     String?
+  postalCode      String?
+  city            String?
   role            UserRole        @default(USER)
   active          Boolean         @default(true)
   createdAt       DateTime        @default(now())

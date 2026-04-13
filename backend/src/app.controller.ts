@@ -103,13 +103,24 @@ export class AppController {
 
   @UseGuards(AuthGuard)
   @Get('rooms/:id/availability')
-  async availability(@Param('id') roomId: string, @Query('from') from: string, @Query('to') to: string) {
-    return this.appService.getAvailability(roomId, new Date(from), new Date(to));
+  async availability(
+    @Param('id') roomId: string,
+    @Query('from') from: string,
+    @Query('to') to: string,
+  ) {
+    return this.appService.getAvailability(
+      roomId,
+      new Date(from),
+      new Date(to),
+    );
   }
 
   @UseGuards(AuthGuard)
   @Post('bookings')
-  async createBooking(@Req() req: RequestWithUser, @Body() body: CreateBookingDto) {
+  async createBooking(
+    @Req() req: RequestWithUser,
+    @Body() body: CreateBookingDto,
+  ) {
     return this.appService.createBooking(req.user, {
       roomId: body.roomId,
       startAt: new Date(body.startAt),
@@ -155,21 +166,33 @@ export class AppController {
   @UseGuards(AuthGuard, RolesGuard)
   @Roles(UserRole.ADMIN)
   @Patch('admin/bookings/:id/approve')
-  async approve(@Req() req: RequestWithUser, @Param('id') id: string, @Body() body: DecisionDto) {
+  async approve(
+    @Req() req: RequestWithUser,
+    @Param('id') id: string,
+    @Body() body: DecisionDto,
+  ) {
     return this.appService.approveBooking(req.user, id, body.reason);
   }
 
   @UseGuards(AuthGuard, RolesGuard)
   @Roles(UserRole.ADMIN)
   @Patch('admin/bookings/:id/reject')
-  async reject(@Req() req: RequestWithUser, @Param('id') id: string, @Body() body: DecisionDto) {
+  async reject(
+    @Req() req: RequestWithUser,
+    @Param('id') id: string,
+    @Body() body: DecisionDto,
+  ) {
     return this.appService.rejectBooking(req.user, id, body.reason);
   }
 
   @UseGuards(AuthGuard, RolesGuard)
   @Roles(UserRole.ADMIN)
   @Patch('admin/bookings/:id/block')
-  async block(@Req() req: RequestWithUser, @Param('id') id: string, @Body() body: DecisionDto) {
+  async block(
+    @Req() req: RequestWithUser,
+    @Param('id') id: string,
+    @Body() body: DecisionDto,
+  ) {
     return this.appService.blockBooking(req.user, id, body.reason);
   }
 

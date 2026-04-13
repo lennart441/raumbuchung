@@ -8,6 +8,7 @@ import { BookingStatus, DecisionType, Prisma, UserRole } from '@prisma/client';
 import { PrismaService } from './prisma.service';
 import { AuthUser } from './auth/request-user';
 import { resolveRoleFromClaims } from './auth/role-resolution';
+import { MailService } from './mail.service';
 
 type CreateBookingInput = {
   roomId: string;
@@ -25,19 +26,29 @@ type UpdateBookingInput = {
 
 @Injectable()
 export class AppService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly mailService: MailService,
+  ) {}
 
-  async getHealth() {
+  getHealth() {
     return { ok: true };
   }
 
   async ensureUser(identity: AuthUser) {
     const role = this.resolveRole(identity);
+    const birthDate = this.parseBirthDate(identity.birthDate);
     return this.prisma.user.upsert({
       where: { authentikSub: identity.sub },
       update: {
         email: identity.email,
         displayName: identity.name,
+        phone: identity.phone,
+        birthDate,
+        street: identity.street,
+        houseNumber: identity.houseNumber,
+        postalCode: identity.postalCode,
+        city: identity.city,
         role,
         active: true,
       },
@@ -45,6 +56,12 @@ export class AppService {
         authentikSub: identity.sub,
         email: identity.email,
         displayName: identity.name,
+        phone: identity.phone,
+        birthDate,
+        street: identity.street,
+        houseNumber: identity.houseNumber,
+        postalCode: identity.postalCode,
+        city: identity.city,
         role,
       },
     });
@@ -56,6 +73,12 @@ export class AppService {
       id: user.id,
       email: user.email,
       displayName: user.displayName,
+      phone: user.phone,
+      birthDate: user.birthDate,
+      street: user.street,
+      houseNumber: user.houseNumber,
+      postalCode: user.postalCode,
+      city: user.city,
       role: user.role,
       active: user.active,
     };
@@ -81,7 +104,13 @@ export class AppService {
         startAt: { lt: to },
         endAt: { gt: from },
       },
-      select: { id: true, startAt: true, endAt: true, status: true, isOverbooked: true },
+      select: {
+        id: true,
+        startAt: true,
+        endAt: true,
+        status: true,
+        isOverbooked: true,
+      },
       orderBy: { startAt: 'asc' },
     });
 
@@ -101,9 +130,11 @@ export class AppService {
   async createBooking(identity: AuthUser, input: CreateBookingInput) {
     const user = await this.ensureUser(identity);
     await this.assertUserCanBook(user.id, input.roomId);
-    await this.assertValidRange(input.startAt, input.endAt);
+    this.assertValidRange(input.startAt, input.endAt);
 
-    const room = await this.prisma.room.findUnique({ where: { id: input.roomId } });
+    const room = await this.prisma.room.findUnique({
+      where: { id: input.roomId },
+    });
     if (!room || !room.isActive) {
       throw new NotFoundException('Raum nicht gefunden');
     }
@@ -132,7 +163,7 @@ export class AppService {
         ? BookingStatus.APPROVED
         : BookingStatus.PENDING;
 
-    return this.prisma.booking.create({
+    const booking = await this.prisma.booking.create({
       data: {
         roomId: input.roomId,
         userId: user.id,
@@ -142,7 +173,11 @@ export class AppService {
         isOverbooked,
         status,
       },
+      include: { room: true, user: true },
     });
+
+    await this.mailService.sendBookingCreatedMail(booking);
+    return booking;
   }
 
   async myBookings(identity: AuthUser) {
@@ -154,11 +189,15 @@ export class AppService {
     });
   }
 
-  async updateBooking(identity: AuthUser, bookingId: string, input: UpdateBookingInput) {
+  async updateBooking(
+    identity: AuthUser,
+    bookingId: string,
+    input: UpdateBookingInput,
+  ) {
     const actor = await this.ensureUser(identity);
     const existing = await this.prisma.booking.findUnique({
       where: { id: bookingId },
-      include: { user: true },
+      include: { user: true, room: true },
     });
     if (!existing) throw new NotFoundException('Buchung nicht gefunden');
 
@@ -171,7 +210,7 @@ export class AppService {
     const endAt = input.endAt ?? existing.endAt;
 
     await this.assertUserCanBook(existing.userId, roomId);
-    await this.assertValidRange(startAt, endAt);
+    this.assertValidRange(startAt, endAt);
 
     const room = await this.prisma.room.findUnique({ where: { id: roomId } });
     if (!room || !room.isActive) {
@@ -203,7 +242,7 @@ export class AppService {
         ? BookingStatus.APPROVED
         : BookingStatus.PENDING;
 
-    return this.prisma.booking.update({
+    const updated = await this.prisma.booking.update({
       where: { id: bookingId },
       data: {
         roomId,
@@ -213,13 +252,21 @@ export class AppService {
         isOverbooked,
         status,
       },
+      include: { room: true, user: true },
     });
+
+    if (actor.role === UserRole.ADMIN) {
+      await this.mailService.sendBookingUpdatedByAdminMail(updated);
+    }
+
+    return updated;
   }
 
   async deleteBooking(identity: AuthUser, bookingId: string) {
     const actor = await this.ensureUser(identity);
     const existing = await this.prisma.booking.findUnique({
       where: { id: bookingId },
+      include: { room: true, user: true },
     });
     if (!existing) throw new NotFoundException('Buchung nicht gefunden');
 
@@ -228,6 +275,11 @@ export class AppService {
     }
 
     await this.prisma.booking.delete({ where: { id: bookingId } });
+
+    if (actor.role === UserRole.ADMIN) {
+      await this.mailService.sendBookingDeletedByAdminMail(existing);
+    }
+
     return { ok: true };
   }
 
@@ -241,17 +293,46 @@ export class AppService {
 
   async approveBooking(identity: AuthUser, bookingId: string, reason?: string) {
     const admin = await this.ensureUser(identity);
-    return this.applyAdminDecision(admin.id, bookingId, DecisionType.APPROVE, reason);
+    const updated = await this.applyAdminDecision(
+      admin.id,
+      bookingId,
+      DecisionType.APPROVE,
+      reason,
+    );
+    await this.mailService.sendBookingApprovedMail(updated, reason);
+    return updated;
   }
 
   async rejectBooking(identity: AuthUser, bookingId: string, reason?: string) {
     const admin = await this.ensureUser(identity);
-    return this.applyAdminDecision(admin.id, bookingId, DecisionType.REJECT, reason);
+    const updated = await this.applyAdminDecision(
+      admin.id,
+      bookingId,
+      DecisionType.REJECT,
+      reason,
+    );
+    await this.mailService.sendBookingRejectedMail(
+      updated,
+      DecisionType.REJECT,
+      reason,
+    );
+    return updated;
   }
 
   async blockBooking(identity: AuthUser, bookingId: string, reason?: string) {
     const admin = await this.ensureUser(identity);
-    return this.applyAdminDecision(admin.id, bookingId, DecisionType.BLOCK, reason);
+    const updated = await this.applyAdminDecision(
+      admin.id,
+      bookingId,
+      DecisionType.BLOCK,
+      reason,
+    );
+    await this.mailService.sendBookingRejectedMail(
+      updated,
+      DecisionType.BLOCK,
+      reason,
+    );
+    return updated;
   }
 
   async addRoomBlock(
@@ -262,7 +343,7 @@ export class AppService {
     reason: string,
   ) {
     const admin = await this.ensureUser(identity);
-    await this.assertValidRange(startAt, endAt);
+    this.assertValidRange(startAt, endAt);
 
     return this.prisma.roomBlock.create({
       data: {
@@ -281,7 +362,12 @@ export class AppService {
     });
   }
 
-  async banUserRoom(userId: string, roomId: string, reason?: string, endsAt?: Date) {
+  async banUserRoom(
+    userId: string,
+    roomId: string,
+    reason?: string,
+    endsAt?: Date,
+  ) {
     return this.prisma.userRoomBan.create({
       data: { userId, roomId, reason, endsAt },
     });
@@ -290,7 +376,9 @@ export class AppService {
   async dashboard() {
     const [pendingCount, overbookedCount, recentBookings] = await Promise.all([
       this.prisma.booking.count({ where: { status: BookingStatus.PENDING } }),
-      this.prisma.booking.count({ where: { isOverbooked: true, status: BookingStatus.PENDING } }),
+      this.prisma.booking.count({
+        where: { isOverbooked: true, status: BookingStatus.PENDING },
+      }),
       this.prisma.booking.findMany({
         include: { user: true, room: true },
         orderBy: { createdAt: 'desc' },
@@ -303,6 +391,13 @@ export class AppService {
 
   private resolveRole(identity: AuthUser): UserRole {
     return resolveRoleFromClaims(identity.role, identity.groups);
+  }
+
+  private parseBirthDate(birthDate?: string) {
+    if (!birthDate) return undefined;
+    const parsed = new Date(birthDate);
+    if (Number.isNaN(parsed.getTime())) return undefined;
+    return parsed;
   }
 
   private async assertUserCanBook(userId: string, roomId: string) {
@@ -327,8 +422,12 @@ export class AppService {
     }
   }
 
-  private async assertValidRange(startAt: Date, endAt: Date) {
-    if (Number.isNaN(startAt.getTime()) || Number.isNaN(endAt.getTime()) || startAt >= endAt) {
+  private assertValidRange(startAt: Date, endAt: Date) {
+    if (
+      Number.isNaN(startAt.getTime()) ||
+      Number.isNaN(endAt.getTime()) ||
+      startAt >= endAt
+    ) {
       throw new BadRequestException('Ungültiger Zeitraum');
     }
   }
@@ -349,7 +448,7 @@ export class AppService {
     return this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       const booking = await tx.booking.findUnique({ where: { id: bookingId } });
       if (!booking) throw new NotFoundException('Buchung nicht gefunden');
-      const updated = await tx.booking.update({
+      await tx.booking.update({
         where: { id: bookingId },
         data: { status: nextStatus },
       });
@@ -361,7 +460,10 @@ export class AppService {
           reason,
         },
       });
-      return updated;
+      return tx.booking.findUniqueOrThrow({
+        where: { id: bookingId },
+        include: { room: true, user: true },
+      });
     });
   }
 }
