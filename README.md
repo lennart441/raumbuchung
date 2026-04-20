@@ -9,7 +9,7 @@
 ## Docker Start (nativ in Containern)
 1. Optional `.env` für Compose anlegen:
    - `cp .env.example .env`
-   - Werte für `AUTHENTIK_ISSUER`, `AUTHENTIK_AUDIENCE`, `VITE_AUTHENTIK_CLIENT_ID`, `VITE_AUTHENTIK_REDIRECT_URI` und ggf. Mailcow SMTP (`MAIL_*`) setzen
+   - Werte für `AUTHENTIK_OIDC_ISSUER`, `AUTHENTIK_OIDC_CLIENT_ID`, `AUTHENTIK_OIDC_AUDIENCE`, `AUTHENTIK_OIDC_APP_ORIGIN` und ggf. Mailcow SMTP (`MAIL_*`) setzen
 2. Starten:
    - `docker compose up --build -d`
 3. Aufrufen:
@@ -25,20 +25,19 @@ Beim Backend-Start werden Migrationen automatisch ausgeführt und Seed-Daten ang
 ## Auth Konfiguration (Production-Ready)
 - `AUTH_MODE=oidc` fuer Produktion (dev-header login ist dann deaktiviert)
 - `AUTH_MODE=dev` nur fuer lokale Entwicklung
-- Pflichtwerte fuer OIDC:
-  - `AUTHENTIK_ISSUER`
-  - `AUTHENTIK_AUDIENCE`
-- Pflichtwerte fuer Frontend OIDC:
-  - `VITE_AUTH_MODE=oidc`
-  - `VITE_AUTHENTIK_ISSUER`
-  - `VITE_AUTHENTIK_CLIENT_ID`
-  - `VITE_AUTHENTIK_REDIRECT_URI`
+- Pflichtwerte fuer OIDC (compose):
+  - `AUTHENTIK_OIDC_ISSUER`
+  - `AUTHENTIK_OIDC_CLIENT_ID`
+  - `AUTHENTIK_OIDC_AUDIENCE`
+  - `AUTHENTIK_OIDC_APP_ORIGIN`
 - Optional:
-  - `AUTHENTIK_JWKS_URL` (ueberschreibt automatisch abgeleitete URL `${AUTHENTIK_ISSUER}/jwks/`)
-  - `AUTHENTIK_USERINFO_URL` (Default `${AUTHENTIK_ISSUER}/userinfo/`)
-  - `AUTHENTIK_ENABLE_USERINFO_FALLBACK` (Default `true`)
-  - `AUTH_JWKS_TIMEOUT_MS` (Default 5000)
-  - `AUTH_CLOCK_TOLERANCE_SEC` (Default 5)
+  - `AUTHENTIK_OIDC_JWKS_URL` (ueberschreibt automatisch abgeleitete URL `${AUTHENTIK_OIDC_ISSUER}/jwks/`)
+  - `AUTHENTIK_OIDC_USERINFO_URL` (Default `${AUTHENTIK_OIDC_ISSUER}/userinfo/`)
+  - `AUTHENTIK_OIDC_ENABLE_USERINFO_FALLBACK` (Default `false`)
+  - `AUTHENTIK_OIDC_JWKS_TIMEOUT_MS` (Default 5000)
+  - `AUTHENTIK_OIDC_CLOCK_TOLERANCE_SEC` (Default 0)
+  - `AUTHENTIK_OIDC_POST_LOGOUT_REDIRECT_URI` (Default `${AUTHENTIK_OIDC_APP_ORIGIN}`)
+  - `AUTHENTIK_OIDC_SCOPE` (Default `openid profile email phone`)
 
 ## Lokaler Dev-Mode (ohne Container)
 - `cp backend/.env.example backend/.env`

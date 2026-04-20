@@ -171,20 +171,29 @@ function App() {
 
   const oidcManager = useMemo(() => {
     if (!isOidcMode) return null
-    const authority = import.meta.env.VITE_AUTHENTIK_ISSUER as string | undefined
-    const clientId = import.meta.env.VITE_AUTHENTIK_CLIENT_ID as string | undefined
-    const redirectUri = import.meta.env.VITE_AUTHENTIK_REDIRECT_URI as string | undefined
-    if (!authority || !clientId || !redirectUri) return null
+    const authority =
+      (import.meta.env.VITE_AUTHENTIK_OIDC_ISSUER as string | undefined) ??
+      (import.meta.env.VITE_AUTHENTIK_ISSUER as string | undefined)
+    const clientId =
+      (import.meta.env.VITE_AUTHENTIK_OIDC_CLIENT_ID as string | undefined) ??
+      (import.meta.env.VITE_AUTHENTIK_CLIENT_ID as string | undefined)
+    const appOrigin =
+      (import.meta.env.VITE_AUTHENTIK_OIDC_APP_ORIGIN as string | undefined) ?? window.location.origin
+    if (!authority || !clientId || !appOrigin) return null
     return new UserManager({
       authority,
       client_id: clientId,
-      redirect_uri: redirectUri,
+      redirect_uri: appOrigin,
       post_logout_redirect_uri:
+        (import.meta.env.VITE_AUTHENTIK_OIDC_POST_LOGOUT_REDIRECT_URI as string | undefined) ??
         (import.meta.env.VITE_AUTHENTIK_POST_LOGOUT_REDIRECT_URI as string | undefined) ??
-        window.location.origin,
+        appOrigin,
       response_type: 'code',
-      scope: (import.meta.env.VITE_AUTHENTIK_SCOPE as string | undefined) ?? 'openid profile email',
-      userStore: new WebStorageStateStore({ store: window.localStorage }),
+      scope:
+        (import.meta.env.VITE_AUTHENTIK_OIDC_SCOPE as string | undefined) ??
+        (import.meta.env.VITE_AUTHENTIK_SCOPE as string | undefined) ??
+        'openid profile email',
+      userStore: new WebStorageStateStore({ store: window.sessionStorage }),
     })
   }, [])
 
@@ -441,7 +450,7 @@ function App() {
               <p className="mt-2 text-xs text-slate-500">Anmeldung ueber Authentik (OIDC/PKCE).</p>
               {!oidcManager && (
                 <p className="mt-2 text-xs text-rose-700">
-                  OIDC ist aktiv, aber `VITE_AUTHENTIK_*` ist unvollstaendig konfiguriert.
+                  OIDC ist aktiv, aber `VITE_AUTHENTIK_OIDC_*` ist unvollstaendig konfiguriert.
                 </p>
               )}
               {authError && <p className="mt-2 text-xs text-rose-700">{authError}</p>}

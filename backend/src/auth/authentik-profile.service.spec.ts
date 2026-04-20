@@ -4,6 +4,7 @@ import { AuthentikProfileService } from './authentik-profile.service';
 describe('AuthentikProfileService', () => {
   const config = {
     get: jest.fn((key: string) => {
+      if (key === 'AUTHENTIK_OIDC_USERINFO_URL') return '';
       if (key === 'AUTHENTIK_USERINFO_URL') return '';
       return undefined;
     }),

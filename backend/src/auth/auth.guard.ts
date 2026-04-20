@@ -56,12 +56,20 @@ export class AuthGuard implements CanActivate {
       throw new UnauthorizedException('Fehlender Bearer Token');
     }
 
-    const issuer = this.config.get<string>('AUTHENTIK_ISSUER');
-    const audience = this.config.get<string>('AUTHENTIK_AUDIENCE');
+    const issuer = this.getConfig(
+      'AUTHENTIK_OIDC_ISSUER',
+      'AUTHENTIK_ISSUER',
+    );
+    const audience = this.getConfig(
+      'AUTHENTIK_OIDC_AUDIENCE',
+      'AUTHENTIK_AUDIENCE',
+      'AUTHENTIK_OIDC_CLIENT_ID',
+    );
     if (!issuer || !audience) {
       this.logAuth('auth-config-missing', req);
       throw new UnauthorizedException('Authentik Konfiguration fehlt');
     }
+    this.ensureSecureIssuer(issuer);
 
     const jwks = this.getJwks(issuer);
     const clockTolerance = this.getClockToleranceSeconds();
@@ -131,7 +139,10 @@ export class AuthGuard implements CanActivate {
   }
 
   private getJwks(issuer: string) {
-    const configuredJwks = this.config.get<string>('AUTHENTIK_JWKS_URL');
+    const configuredJwks = this.getConfig(
+      'AUTHENTIK_OIDC_JWKS_URL',
+      'AUTHENTIK_JWKS_URL',
+    );
     const fallbackJwks = `${issuer.replace(/\/+$/, '')}/jwks/`;
     const resolvedJwksUrl = configuredJwks?.trim() || fallbackJwks;
     if (this.cachedJwks && this.cachedJwksUrl === resolvedJwksUrl) {
@@ -148,22 +159,54 @@ export class AuthGuard implements CanActivate {
 
   private getJwksTimeoutMs(): number {
     const raw = Number(
-      this.config.get<string>('AUTH_JWKS_TIMEOUT_MS') ?? '5000',
+      this.getConfig('AUTHENTIK_OIDC_JWKS_TIMEOUT_MS', 'AUTH_JWKS_TIMEOUT_MS') ??
+        '5000',
     );
     return Number.isFinite(raw) && raw > 0 ? raw : 5000;
   }
 
   private getClockToleranceSeconds(): number {
     const raw = Number(
-      this.config.get<string>('AUTH_CLOCK_TOLERANCE_SEC') ?? '5',
+      this.getConfig(
+        'AUTHENTIK_OIDC_CLOCK_TOLERANCE_SEC',
+        'AUTH_CLOCK_TOLERANCE_SEC',
+      ) ?? '0',
     );
-    return Number.isFinite(raw) && raw >= 0 ? raw : 5;
+    return Number.isFinite(raw) && raw >= 0 ? raw : 0;
   }
 
   private isUserInfoFallbackEnabled(): boolean {
-    const raw = this.config.get<string>('AUTHENTIK_ENABLE_USERINFO_FALLBACK');
-    if (!raw) return true;
+    const raw = this.getConfig(
+      'AUTHENTIK_OIDC_ENABLE_USERINFO_FALLBACK',
+      'AUTHENTIK_ENABLE_USERINFO_FALLBACK',
+    );
+    if (!raw) return false;
     return raw.toLowerCase() === 'true';
+  }
+
+  private getConfig(...keys: string[]) {
+    for (const key of keys) {
+      const value = this.config.get<string>(key)?.trim();
+      if (value) return value;
+    }
+    return undefined;
+  }
+
+  private ensureSecureIssuer(issuer: string) {
+    try {
+      const url = new URL(issuer);
+      const isLocalhost =
+        url.hostname === 'localhost' ||
+        url.hostname === '127.0.0.1' ||
+        url.hostname === '::1';
+      if (url.protocol !== 'https:' && !isLocalhost) {
+        throw new UnauthorizedException(
+          'OIDC Issuer muss HTTPS verwenden (ausser localhost)',
+        );
+      }
+    } catch {
+      throw new UnauthorizedException('OIDC Issuer URL ist ungueltig');
+    }
   }
 
   private shouldFetchUserInfoProfile(profile: {

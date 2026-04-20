@@ -43,7 +43,9 @@ export class AuthentikProfileService {
   }
 
   private resolveUserInfoUrl(issuer: string) {
-    const configured = this.config.get<string>('AUTHENTIK_USERINFO_URL')?.trim();
+    const configured =
+      this.config.get<string>('AUTHENTIK_OIDC_USERINFO_URL')?.trim() ||
+      this.config.get<string>('AUTHENTIK_USERINFO_URL')?.trim();
     if (configured) return configured;
     return `${issuer.replace(/\/+$/, '')}/userinfo/`;
   }
