@@ -176,7 +176,7 @@ export class AppService {
       include: { room: true, user: true },
     });
 
-    await this.mailService.sendBookingCreatedMail(booking);
+    this.mailService.sendBookingCreatedMail(booking);
     return booking;
   }
 
@@ -256,7 +256,7 @@ export class AppService {
     });
 
     if (actor.role === UserRole.ADMIN) {
-      await this.mailService.sendBookingUpdatedByAdminMail(updated);
+      this.mailService.sendBookingUpdatedByAdminMail(updated);
     }
 
     return updated;
@@ -277,7 +277,7 @@ export class AppService {
     await this.prisma.booking.delete({ where: { id: bookingId } });
 
     if (actor.role === UserRole.ADMIN) {
-      await this.mailService.sendBookingDeletedByAdminMail(existing);
+      this.mailService.sendBookingDeletedByAdminMail(existing);
     }
 
     return { ok: true };
@@ -317,7 +317,7 @@ export class AppService {
       DecisionType.APPROVE,
       reason,
     );
-    await this.mailService.sendBookingApprovedMail(updated, reason);
+    this.mailService.sendBookingApprovedMail(updated, reason);
     return updated;
   }
 
@@ -329,7 +329,7 @@ export class AppService {
       DecisionType.REJECT,
       reason,
     );
-    await this.mailService.sendBookingRejectedMail(
+    this.mailService.sendBookingRejectedMail(
       updated,
       DecisionType.REJECT,
       reason,
@@ -345,7 +345,7 @@ export class AppService {
       DecisionType.BLOCK,
       reason,
     );
-    await this.mailService.sendBookingRejectedMail(
+    this.mailService.sendBookingRejectedMail(
       updated,
       DecisionType.BLOCK,
       reason,

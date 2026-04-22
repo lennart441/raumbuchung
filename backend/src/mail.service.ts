@@ -45,6 +45,13 @@ export class MailService {
     const password = this.configService.get<string>('MAIL_PASSWORD');
     const secure =
       this.configService.get<string>('MAIL_SECURE', 'false') === 'true';
+    const useImplicitTls = secure && port !== 587;
+
+    if (secure && port === 587) {
+      this.logger.warn(
+        'MAIL_SECURE=true mit Port 587 erkannt. Nutze STARTTLS (secure=false) statt implizitem TLS.',
+      );
+    }
 
     if (!host || !username || !password || Number.isNaN(port)) {
       this.logger.warn(
@@ -57,7 +64,8 @@ export class MailService {
     this.transporter = nodemailer.createTransport({
       host,
       port,
-      secure,
+      secure: useImplicitTls,
+      requireTLS: port === 587,
       auth: {
         user: username,
         pass: password,
@@ -65,7 +73,7 @@ export class MailService {
     });
   }
 
-  async sendBookingCreatedMail(booking: BookingWithRelations) {
+  sendBookingCreatedMail(booking: BookingWithRelations) {
     const isApproved = booking.status === BookingStatus.APPROVED;
     const subject = isApproved
       ? 'Deine Buchung ist bestätigt'
@@ -77,7 +85,7 @@ export class MailService {
       ? 'Dein Termin wurde direkt bestätigt und ist verbindlich im Kalender eingetragen.'
       : 'Dein Termin wurde erfasst und wartet nun auf eine Admin-Bestätigung.';
 
-    await this.sendMailSafe(
+    this.dispatchMail(
       booking.user.email,
       subject,
       headline,
@@ -86,11 +94,11 @@ export class MailService {
     );
   }
 
-  async sendBookingApprovedMail(
+  sendBookingApprovedMail(
     booking: BookingWithRelations,
     reason?: string,
   ) {
-    await this.sendMailSafe(
+    this.dispatchMail(
       booking.user.email,
       'Deine Buchung wurde bestätigt',
       'Termin bestätigt',
@@ -100,13 +108,13 @@ export class MailService {
     );
   }
 
-  async sendBookingRejectedMail(
+  sendBookingRejectedMail(
     booking: BookingWithRelations,
     decision: DecisionType,
     reason?: string,
   ) {
     const isBlocked = decision === DecisionType.BLOCK;
-    await this.sendMailSafe(
+    this.dispatchMail(
       booking.user.email,
       isBlocked
         ? 'Deine Buchung wurde gesperrt'
@@ -120,8 +128,8 @@ export class MailService {
     );
   }
 
-  async sendBookingUpdatedByAdminMail(booking: BookingWithRelations) {
-    await this.sendMailSafe(
+  sendBookingUpdatedByAdminMail(booking: BookingWithRelations) {
+    this.dispatchMail(
       booking.user.email,
       'Dein Termin wurde geändert',
       'Termin geändert',
@@ -130,14 +138,26 @@ export class MailService {
     );
   }
 
-  async sendBookingDeletedByAdminMail(booking: BookingWithRelations) {
-    await this.sendMailSafe(
+  sendBookingDeletedByAdminMail(booking: BookingWithRelations) {
+    this.dispatchMail(
       booking.user.email,
       'Dein Termin wurde gelöscht',
       'Termin gelöscht',
       'Ein Admin hat deine Buchung entfernt. Bitte buche bei Bedarf erneut.',
       booking,
     );
+  }
+
+  private dispatchMail(
+    to: string,
+    subject: string,
+    headline: string,
+    message: string,
+    booking: BookingWithRelations,
+    reason?: string,
+  ) {
+    // Fire-and-forget: API response is not blocked by SMTP latency/errors.
+    void this.sendMailSafe(to, subject, headline, message, booking, reason);
   }
 
   private async sendMailSafe(
