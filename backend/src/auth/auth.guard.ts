@@ -72,10 +72,11 @@ export class AuthGuard implements CanActivate {
     this.ensureSecureIssuer(issuer);
 
     const jwks = this.getJwks(issuer);
+    const acceptedIssuers = this.getAcceptedIssuers(issuer);
     const clockTolerance = this.getClockToleranceSeconds();
     try {
       const result = await jwtVerify(token, jwks, {
-        issuer,
+        issuer: acceptedIssuers,
         audience,
         clockTolerance,
       });
@@ -207,6 +208,13 @@ export class AuthGuard implements CanActivate {
     } catch {
       throw new UnauthorizedException('OIDC Issuer URL ist ungueltig');
     }
+  }
+
+  private getAcceptedIssuers(issuer: string): string[] {
+    const trimmed = issuer.replace(/\/+$/, '');
+    const withTrailingSlash = `${trimmed}/`;
+    if (trimmed === issuer) return [issuer, withTrailingSlash];
+    return [issuer, trimmed];
   }
 
   private shouldFetchUserInfoProfile(profile: {

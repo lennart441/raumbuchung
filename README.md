@@ -9,7 +9,7 @@
 ## Docker Start (nativ in Containern)
 1. Optional `.env` für Compose anlegen:
    - `cp .env.example .env`
-   - Werte für `AUTHENTIK_OIDC_ISSUER`, `AUTHENTIK_OIDC_CLIENT_ID`, `AUTHENTIK_OIDC_AUDIENCE`, `AUTHENTIK_OIDC_APP_ORIGIN` und ggf. Mailcow SMTP (`MAIL_*`) setzen
+   - Werte für `FRONTEND_ORIGIN`, `VITE_API_URL`, `AUTHENTIK_OIDC_ISSUER`, `AUTHENTIK_OIDC_CLIENT_ID`, `AUTHENTIK_OIDC_AUDIENCE`, `AUTHENTIK_OIDC_APP_ORIGIN` und ggf. Mailcow SMTP (`MAIL_*`) setzen
 2. Starten:
    - `docker compose up --build -d`
 3. Aufrufen:

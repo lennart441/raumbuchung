@@ -23,7 +23,7 @@ services:
     container_name: raumbuchung-backend
     environment:
       PORT: 3000
-      FRONTEND_ORIGIN: http://localhost:8080
+      FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-http://localhost:8080}
       DATABASE_URL: postgresql://postgres:postgres@db:5432/raumbuchung
       AUTH_MODE: ${AUTH_MODE:-dev}
       AUTHENTIK_OIDC_ISSUER: ${AUTHENTIK_OIDC_ISSUER:-https://auth.example.com/application/o/raumbuchung}
@@ -51,7 +51,7 @@ services:
     build:
       context: ./frontend
       args:
-        VITE_API_URL: /api
+        VITE_API_URL: ${VITE_API_URL:-/api}
         VITE_AUTH_MODE: ${AUTH_MODE:-oidc}
         VITE_AUTHENTIK_OIDC_ISSUER: ${AUTHENTIK_OIDC_ISSUER:-https://auth.example.com/application/o/raumbuchung}
         VITE_AUTHENTIK_OIDC_CLIENT_ID: ${AUTHENTIK_OIDC_CLIENT_ID:-raumbuchung-frontend}
