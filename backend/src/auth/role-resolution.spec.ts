@@ -6,6 +6,9 @@ describe('resolveRoleFromClaims', () => {
     expect(resolveRoleFromClaims('ADMIN', ['extended_user'])).toBe(
       UserRole.ADMIN,
     );
+    expect(resolveRoleFromClaims('extended', ['admin'])).toBe(
+      UserRole.EXTENDED_USER,
+    );
     expect(resolveRoleFromClaims('extended_user', ['admin'])).toBe(
       UserRole.EXTENDED_USER,
     );
@@ -13,7 +16,13 @@ describe('resolveRoleFromClaims', () => {
 
   it('falls back to groups when role claim missing', () => {
     expect(resolveRoleFromClaims(undefined, ['admin'])).toBe(UserRole.ADMIN);
+    expect(resolveRoleFromClaims(undefined, ['raumbuchung_admin'])).toBe(
+      UserRole.ADMIN,
+    );
     expect(resolveRoleFromClaims(undefined, ['extended_user'])).toBe(
+      UserRole.EXTENDED_USER,
+    );
+    expect(resolveRoleFromClaims(undefined, ['raumbuchung_extended'])).toBe(
       UserRole.EXTENDED_USER,
     );
   });
