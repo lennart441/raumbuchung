@@ -181,7 +181,7 @@ export class AuthGuard implements CanActivate {
       'AUTHENTIK_OIDC_ENABLE_USERINFO_FALLBACK',
       'AUTHENTIK_ENABLE_USERINFO_FALLBACK',
     );
-    if (!raw) return false;
+    if (!raw) return true;
     return raw.toLowerCase() === 'true';
   }
 
@@ -240,26 +240,39 @@ export class AuthGuard implements CanActivate {
       payload.address && typeof payload.address === 'object'
         ? (payload.address as Record<string, unknown>)
         : undefined;
+    const attributes =
+      payload.attributes && typeof payload.attributes === 'object'
+        ? (payload.attributes as Record<string, unknown>)
+        : undefined;
     const streetAddress =
       this.pickString(payload, ['street_address']) ??
+      this.pickString(attributes, ['street_address']) ??
       this.pickString(address, ['street_address']);
     const parsedAddress = this.splitStreetAndHouseNumber(streetAddress);
     return {
-      phone: this.pickString(payload, ['phone_number', 'phone']),
-      birthDate: this.pickString(payload, ['birthdate', 'birthday']),
+      phone:
+        this.pickString(payload, ['phone_number', 'phone']) ??
+        this.pickString(attributes, ['phone_number', 'phone']),
+      birthDate:
+        this.pickString(payload, ['birthdate', 'birthday']) ??
+        this.pickString(attributes, ['birthdate', 'birthday']),
       street:
         parsedAddress.street ??
         this.pickString(payload, ['street']) ??
+        this.pickString(attributes, ['street']) ??
         this.pickString(address, ['street']),
       houseNumber:
         parsedAddress.houseNumber ??
         this.pickString(payload, ['house_number', 'house-number']) ??
+        this.pickString(attributes, ['house_number', 'house-number']) ??
         this.pickString(address, ['house_number', 'house-number']),
       postalCode:
         this.pickString(payload, ['postal_code', 'zipcode']) ??
+        this.pickString(attributes, ['postal_code', 'zipcode']) ??
         this.pickString(address, ['postal_code', 'zipcode']),
       city:
         this.pickString(payload, ['city', 'locality', 'town']) ??
+        this.pickString(attributes, ['city', 'locality', 'town']) ??
         this.pickString(address, ['city', 'locality', 'town']),
     };
   }
