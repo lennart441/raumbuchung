@@ -16,6 +16,9 @@ describe('resolveRoleFromClaims', () => {
 
   it('falls back to groups when role claim missing', () => {
     expect(resolveRoleFromClaims(undefined, ['admin'])).toBe(UserRole.ADMIN);
+    expect(resolveRoleFromClaims(undefined, [' authentik Admins '])).toBe(
+      UserRole.ADMIN,
+    );
     expect(resolveRoleFromClaims(undefined, ['raumbuchung_admin'])).toBe(
       UserRole.ADMIN,
     );

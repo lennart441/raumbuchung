@@ -9,6 +9,7 @@ const roleMap: Record<string, UserRole> = {
 
 const groupMap: Record<string, UserRole> = {
   admin: UserRole.ADMIN,
+  'authentik admins': UserRole.ADMIN,
   raumbuchung_admin: UserRole.ADMIN,
   extended: UserRole.EXTENDED_USER,
   extended_user: UserRole.EXTENDED_USER,
@@ -28,11 +29,11 @@ export function resolveRoleFromClaims(
 
   const groupList = groups ?? [];
   for (const groupName of groupList) {
-    const normalizedGroup = groupName.toLowerCase();
+    const normalizedGroup = groupName.trim().toLowerCase();
     if (groupMap[normalizedGroup] === UserRole.ADMIN) return UserRole.ADMIN;
   }
   for (const groupName of groupList) {
-    const normalizedGroup = groupName.toLowerCase();
+    const normalizedGroup = groupName.trim().toLowerCase();
     if (groupMap[normalizedGroup] === UserRole.EXTENDED_USER) {
       return UserRole.EXTENDED_USER;
     }
