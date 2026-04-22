@@ -63,21 +63,21 @@ export class AuthentikProfileService {
 
     return {
       phone: this.pickString(payload, ['phone_number', 'phone']),
-      birthDate: this.pickString(payload, ['birthdate']),
+      birthDate: this.pickString(payload, ['birthdate', 'birthday']),
       street:
         parsedAddress.street ??
         this.pickString(payload, ['street']) ??
         this.pickString(address, ['street']),
       houseNumber:
         parsedAddress.houseNumber ??
-        this.pickString(payload, ['house_number']) ??
-        this.pickString(address, ['house_number']),
+        this.pickString(payload, ['house_number', 'house-number']) ??
+        this.pickString(address, ['house_number', 'house-number']),
       postalCode:
-        this.pickString(payload, ['postal_code']) ??
-        this.pickString(address, ['postal_code']),
+        this.pickString(payload, ['postal_code', 'zipcode']) ??
+        this.pickString(address, ['postal_code', 'zipcode']),
       city:
-        this.pickString(payload, ['city', 'locality']) ??
-        this.pickString(address, ['city', 'locality']),
+        this.pickString(payload, ['city', 'locality', 'town']) ??
+        this.pickString(address, ['city', 'locality', 'town']),
     };
   }
 
