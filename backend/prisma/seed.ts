@@ -2,21 +2,30 @@ import { PrismaClient, UserRole } from '@prisma/client';
 
 const prisma = new PrismaClient();
 
-async function main() {
-  const rooms = Array.from({ length: 10 }, (_, idx) => ({
-    name: `Raum ${idx + 1}`,
-    capacity: idx < 2 ? 25 : 12,
-    description:
-      idx < 2
-        ? 'Groesserer Besprechungsraum mit Konferenzausstattung.'
-        : 'Standardraum fuer Teamtermine und Einzelgespraeche.',
-  }));
+const rooms = [
+  {
+    name: 'Alte Meierei',
+    capacity: 40,
+    description: 'Veranstaltungs- und Gemeinderaum.',
+  },
+  {
+    name: 'Alte Schule',
+    capacity: 30,
+    description: 'Seminar- und Gruppenraum.',
+  },
+  {
+    name: 'Feuerwehrhaus',
+    capacity: 25,
+    description: 'Versammlungsraum im Feuerwehrhaus.',
+  },
+];
 
+async function main() {
   for (const room of rooms) {
     await prisma.room.upsert({
       where: { name: room.name },
-      update: room,
-      create: room,
+      update: { ...room, isActive: true },
+      create: { ...room, isActive: true },
     });
   }
 

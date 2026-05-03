@@ -82,7 +82,8 @@ model Booking {
   user          User             @relation(fields: [userId], references: [id], onDelete: Restrict)
   startAt       DateTime
   endAt         DateTime
-  note          String?
+  title         String?
+  description   String?
   status        BookingStatus    @default(PENDING)
   isOverbooked  Boolean          @default(false)
   createdAt     DateTime         @default(now())

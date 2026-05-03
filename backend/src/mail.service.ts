@@ -174,8 +174,11 @@ export class MailService {
 
     const startAt = this.formatDate(booking.startAt);
     const endAt = this.formatDate(booking.endAt);
-    const noteSection = booking.note
-      ? `<p><strong>Hinweis:</strong> ${booking.note}</p>`
+    const titleSection = booking.title
+      ? `<p><strong>Titel:</strong> ${this.escapeHtml(booking.title)}</p>`
+      : '';
+    const descriptionSection = booking.description
+      ? `<p><strong>Beschreibung:</strong> ${this.escapeHtml(booking.description).replace(/\n/g, '<br/>')}</p>`
       : '';
     const reasonSection = reason
       ? `<p><strong>Grund:</strong> ${reason}</p>`
@@ -195,7 +198,8 @@ export class MailService {
             <p><strong>Beginn:</strong> ${startAt}</p>
             <p><strong>Ende:</strong> ${endAt}</p>
             <p><strong>Status:</strong> ${booking.status}</p>
-            ${noteSection}
+            ${titleSection}
+            ${descriptionSection}
             ${reasonSection}
             ${conflictHint}
           </div>
@@ -221,6 +225,14 @@ export class MailService {
         error as Error,
       );
     }
+  }
+
+  private escapeHtml(text: string) {
+    return text
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
   }
 
   private formatDate(value: Date) {

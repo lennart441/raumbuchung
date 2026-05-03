@@ -10,19 +10,87 @@ import { AuthUser } from './auth/request-user';
 import { resolveRoleFromClaims } from './auth/role-resolution';
 import { MailService } from './mail.service';
 
+export type SeriesRecurrence = 'DAILY' | 'WEEKLY' | 'MONTHLY';
+
 type CreateBookingInput = {
   roomId: string;
   startAt: Date;
   endAt: Date;
-  note?: string;
+  title?: string;
+  description?: string;
 };
 
 type UpdateBookingInput = {
   roomId?: string;
   startAt?: Date;
   endAt?: Date;
-  note?: string;
+  title?: string;
+  description?: string;
 };
+
+type SeriesBookingInput = {
+  roomId: string;
+  startAt: Date;
+  endAt: Date;
+  recurrence: SeriesRecurrence;
+  until: string;
+  title?: string;
+  description?: string;
+  skipStartAts?: string[];
+};
+
+type BookingTx = Pick<PrismaService, 'roomBlock' | 'booking'>;
+
+function localDateKey(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function advanceOccurrence(
+  start: Date,
+  end: Date,
+  recurrence: SeriesRecurrence,
+): { startAt: Date; endAt: Date } {
+  const duration = end.getTime() - start.getTime();
+  const ns = new Date(start);
+  if (recurrence === 'DAILY') {
+    ns.setDate(ns.getDate() + 1);
+  } else if (recurrence === 'WEEKLY') {
+    ns.setDate(ns.getDate() + 7);
+  } else {
+    const day = ns.getDate();
+    ns.setMonth(ns.getMonth() + 1);
+    if (ns.getDate() !== day) {
+      ns.setDate(0);
+    }
+  }
+  return { startAt: ns, endAt: new Date(ns.getTime() + duration) };
+}
+
+function expandSeriesOccurrences(
+  firstStart: Date,
+  firstEnd: Date,
+  recurrence: SeriesRecurrence,
+  untilDateStr: string,
+): Array<{ startAt: Date; endAt: Date }> {
+  const untilKey = untilDateStr.trim().slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(untilKey)) {
+    throw new BadRequestException('Serien-Ende (until) muss YYYY-MM-DD sein');
+  }
+  const out: Array<{ startAt: Date; endAt: Date }> = [];
+  let startAt = new Date(firstStart);
+  let endAt = new Date(firstEnd);
+  let guard = 0;
+  while (localDateKey(startAt) <= untilKey && guard++ < 500) {
+    out.push({ startAt: new Date(startAt), endAt: new Date(endAt) });
+    const next = advanceOccurrence(startAt, endAt, recurrence);
+    startAt = next.startAt;
+    endAt = next.endAt;
+  }
+  return out;
+}
 
 @Injectable()
 export class AppService {
@@ -169,7 +237,8 @@ export class AppService {
         userId: user.id,
         startAt: input.startAt,
         endAt: input.endAt,
-        note: input.note,
+        title: input.title,
+        description: input.description,
         isOverbooked,
         status,
       },
@@ -178,6 +247,137 @@ export class AppService {
 
     this.mailService.sendBookingCreatedMail(booking);
     return booking;
+  }
+
+  async previewSeriesBookings(identity: AuthUser, input: SeriesBookingInput) {
+    await this.ensureUser(identity);
+    this.assertValidRange(input.startAt, input.endAt);
+    const room = await this.prisma.room.findUnique({
+      where: { id: input.roomId },
+    });
+    if (!room || !room.isActive) {
+      throw new NotFoundException('Raum nicht gefunden');
+    }
+
+    const slots = expandSeriesOccurrences(
+      input.startAt,
+      input.endAt,
+      input.recurrence,
+      input.until,
+    );
+    if (slots.length === 0) {
+      throw new BadRequestException('Keine Termine im gewählten Zeitraum');
+    }
+
+    const occurrences = await Promise.all(
+      slots.map(async (slot) => {
+        const { conflict, reason } = await this.checkSlotConflict(
+          input.roomId,
+          slot.startAt,
+          slot.endAt,
+        );
+        return {
+          startAt: slot.startAt.toISOString(),
+          endAt: slot.endAt.toISOString(),
+          conflict,
+          reason: conflict ? reason : undefined,
+        };
+      }),
+    );
+
+    return { occurrences };
+  }
+
+  async createSeriesBookings(identity: AuthUser, input: SeriesBookingInput) {
+    const user = await this.ensureUser(identity);
+    await this.assertUserCanBook(user.id, input.roomId);
+    this.assertValidRange(input.startAt, input.endAt);
+
+    const room = await this.prisma.room.findUnique({
+      where: { id: input.roomId },
+    });
+    if (!room || !room.isActive) {
+      throw new NotFoundException('Raum nicht gefunden');
+    }
+
+    const slots = expandSeriesOccurrences(
+      input.startAt,
+      input.endAt,
+      input.recurrence,
+      input.until,
+    );
+    if (slots.length === 0) {
+      throw new BadRequestException('Keine Termine im gewählten Zeitraum');
+    }
+
+    const skipMs = new Set(
+      (input.skipStartAts ?? []).map((s) => new Date(s).getTime()),
+    );
+
+    const skippedExplicit: Array<{ startAt: string; endAt: string }> = [];
+    const skippedConflict: Array<{
+      startAt: string;
+      endAt: string;
+      reason?: string;
+    }> = [];
+
+    const created = await this.prisma.$transaction(async (tx) => {
+      const out: Prisma.BookingGetPayload<{
+        include: { room: true; user: true };
+      }>[] = [];
+      for (const slot of slots) {
+        const t = slot.startAt.getTime();
+        if (skipMs.has(t)) {
+          skippedExplicit.push({
+            startAt: slot.startAt.toISOString(),
+            endAt: slot.endAt.toISOString(),
+          });
+          continue;
+        }
+        const { conflict, reason } = await this.checkSlotConflict(
+          input.roomId,
+          slot.startAt,
+          slot.endAt,
+          tx as BookingTx,
+        );
+        if (conflict) {
+          skippedConflict.push({
+            startAt: slot.startAt.toISOString(),
+            endAt: slot.endAt.toISOString(),
+            reason,
+          });
+          continue;
+        }
+
+        const isOverbooked = false;
+        const status =
+          user.role === UserRole.EXTENDED_USER && !isOverbooked
+            ? BookingStatus.APPROVED
+            : BookingStatus.PENDING;
+
+        const booking = await tx.booking.create({
+          data: {
+            roomId: input.roomId,
+            userId: user.id,
+            startAt: slot.startAt,
+            endAt: slot.endAt,
+            title: input.title,
+            description: input.description,
+            isOverbooked,
+            status,
+          },
+          include: { room: true, user: true },
+        });
+        out.push(booking);
+      }
+      return out;
+    });
+
+    for (const booking of created) {
+      this.mailService.sendBookingCreatedMail(booking);
+    }
+
+    return { created, skippedExplicit, skippedConflict };
   }
 
   async myBookings(identity: AuthUser) {
@@ -248,7 +448,10 @@ export class AppService {
         roomId,
         startAt,
         endAt,
-        note: input.note ?? existing.note ?? undefined,
+        ...(input.title !== undefined ? { title: input.title } : {}),
+        ...(input.description !== undefined
+          ? { description: input.description }
+          : {}),
         isOverbooked,
         status,
       },
@@ -405,6 +608,36 @@ export class AppService {
     ]);
 
     return { pendingCount, overbookedCount, recentBookings };
+  }
+
+  private async checkSlotConflict(
+    roomId: string,
+    startAt: Date,
+    endAt: Date,
+    tx: BookingTx = this.prisma,
+  ): Promise<{ conflict: boolean; reason?: string }> {
+    const block = await tx.roomBlock.findFirst({
+      where: {
+        roomId,
+        startAt: { lt: endAt },
+        endAt: { gt: startAt },
+      },
+    });
+    if (block) {
+      return { conflict: true, reason: 'Raum blockiert' };
+    }
+    const booking = await tx.booking.findFirst({
+      where: {
+        roomId,
+        status: { in: [BookingStatus.APPROVED, BookingStatus.PENDING] },
+        startAt: { lt: endAt },
+        endAt: { gt: startAt },
+      },
+    });
+    if (booking) {
+      return { conflict: true, reason: 'Bereits gebucht' };
+    }
+    return { conflict: false };
   }
 
   private resolveRole(identity: AuthUser): UserRole {

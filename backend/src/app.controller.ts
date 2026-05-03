@@ -10,7 +10,13 @@ import {
   Req,
   UseGuards,
 } from '@nestjs/common';
-import { IsDateString, IsOptional, IsString } from 'class-validator';
+import {
+  IsArray,
+  IsDateString,
+  IsIn,
+  IsOptional,
+  IsString,
+} from 'class-validator';
 import { UserRole, BookingStatus } from '@prisma/client';
 import { AppService } from './app.service';
 import { AuthGuard } from './auth/auth.guard';
@@ -32,7 +38,11 @@ class CreateBookingDto {
 
   @IsOptional()
   @IsString()
-  note?: string;
+  title?: string;
+
+  @IsOptional()
+  @IsString()
+  description?: string;
 }
 
 class UpdateBookingDto {
@@ -50,7 +60,41 @@ class UpdateBookingDto {
 
   @IsOptional()
   @IsString()
-  note?: string;
+  title?: string;
+
+  @IsOptional()
+  @IsString()
+  description?: string;
+}
+
+class SeriesBookingDto {
+  @IsString()
+  roomId!: string;
+
+  @IsDateString()
+  startAt!: string;
+
+  @IsDateString()
+  endAt!: string;
+
+  @IsIn(['DAILY', 'WEEKLY', 'MONTHLY'])
+  recurrence!: 'DAILY' | 'WEEKLY' | 'MONTHLY';
+
+  @IsDateString()
+  until!: string;
+
+  @IsOptional()
+  @IsString()
+  title?: string;
+
+  @IsOptional()
+  @IsString()
+  description?: string;
+
+  @IsOptional()
+  @IsArray()
+  @IsDateString({}, { each: true })
+  skipStartAts?: string[];
 }
 
 class DecisionDto {
@@ -125,7 +169,43 @@ export class AppController {
       roomId: body.roomId,
       startAt: new Date(body.startAt),
       endAt: new Date(body.endAt),
-      note: body.note,
+      title: body.title,
+      description: body.description,
+    });
+  }
+
+  @UseGuards(AuthGuard)
+  @Post('bookings/series/preview')
+  async previewSeriesBooking(
+    @Req() req: RequestWithUser,
+    @Body() body: SeriesBookingDto,
+  ) {
+    return this.appService.previewSeriesBookings(req.user, {
+      roomId: body.roomId,
+      startAt: new Date(body.startAt),
+      endAt: new Date(body.endAt),
+      recurrence: body.recurrence,
+      until: body.until,
+      title: body.title,
+      description: body.description,
+    });
+  }
+
+  @UseGuards(AuthGuard)
+  @Post('bookings/series')
+  async createSeriesBooking(
+    @Req() req: RequestWithUser,
+    @Body() body: SeriesBookingDto,
+  ) {
+    return this.appService.createSeriesBookings(req.user, {
+      roomId: body.roomId,
+      startAt: new Date(body.startAt),
+      endAt: new Date(body.endAt),
+      recurrence: body.recurrence,
+      until: body.until,
+      title: body.title,
+      description: body.description,
+      skipStartAts: body.skipStartAts,
     });
   }
 
@@ -146,7 +226,8 @@ export class AppController {
       roomId: body.roomId,
       startAt: body.startAt ? new Date(body.startAt) : undefined,
       endAt: body.endAt ? new Date(body.endAt) : undefined,
-      note: body.note,
+      title: body.title,
+      description: body.description,
     });
   }
 

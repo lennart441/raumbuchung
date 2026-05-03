@@ -1,5 +1,10 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import {
+  DEFAULT_PHONE_KEYS,
+  DEFAULT_POSTAL_KEYS,
+  pickClaimString,
+} from './profile-claim.util';
 
 type AuthentikProfile = {
   phone?: string;
@@ -50,6 +55,22 @@ export class AuthentikProfileService {
     return `${issuer.replace(/\/+$/, '')}/userinfo/`;
   }
 
+  private phoneClaimKeys(): string[] {
+    const custom =
+      this.config.get<string>('AUTHENTIK_CLAIM_PHONE')?.trim() ||
+      this.config.get<string>('AUTH_CLAIM_PHONE')?.trim();
+    return custom ? [custom, ...DEFAULT_PHONE_KEYS] : [...DEFAULT_PHONE_KEYS];
+  }
+
+  private postalClaimKeys(): string[] {
+    const custom =
+      this.config.get<string>('AUTHENTIK_CLAIM_POSTAL_CODE')?.trim() ||
+      this.config.get<string>('AUTH_CLAIM_POSTAL_CODE')?.trim();
+    return custom
+      ? [custom, ...DEFAULT_POSTAL_KEYS]
+      : [...DEFAULT_POSTAL_KEYS];
+  }
+
   private extractProfile(payload: UserInfoPayload): AuthentikProfile {
     const address =
       payload.address && typeof payload.address === 'object'
@@ -60,49 +81,41 @@ export class AuthentikProfileService {
         ? (payload.attributes as Record<string, unknown>)
         : undefined;
 
+    const phoneKeys = this.phoneClaimKeys();
+    const postalKeys = this.postalClaimKeys();
+
     const streetAddress =
-      this.pickString(payload, ['street_address']) ??
-      this.pickString(attributes, ['street_address']) ??
-      this.pickString(address, ['street_address']);
+      pickClaimString(payload, ['street_address']) ??
+      pickClaimString(attributes, ['street_address']) ??
+      pickClaimString(address, ['street_address']);
     const parsedAddress = this.splitStreetAndHouseNumber(streetAddress);
 
     return {
       phone:
-        this.pickString(payload, ['phone_number', 'phone']) ??
-        this.pickString(attributes, ['phone_number', 'phone']),
+        pickClaimString(payload, phoneKeys) ??
+        pickClaimString(attributes, phoneKeys),
       birthDate:
-        this.pickString(payload, ['birthdate', 'birthday']) ??
-        this.pickString(attributes, ['birthdate', 'birthday']),
+        pickClaimString(payload, ['birthdate', 'birthday']) ??
+        pickClaimString(attributes, ['birthdate', 'birthday']),
       street:
         parsedAddress.street ??
-        this.pickString(payload, ['street']) ??
-        this.pickString(attributes, ['street']) ??
-        this.pickString(address, ['street']),
+        pickClaimString(payload, ['street']) ??
+        pickClaimString(attributes, ['street']) ??
+        pickClaimString(address, ['street']),
       houseNumber:
         parsedAddress.houseNumber ??
-        this.pickString(payload, ['house_number', 'house-number']) ??
-        this.pickString(attributes, ['house_number', 'house-number']) ??
-        this.pickString(address, ['house_number', 'house-number']),
+        pickClaimString(payload, ['house_number', 'house-number']) ??
+        pickClaimString(attributes, ['house_number', 'house-number']) ??
+        pickClaimString(address, ['house_number', 'house-number']),
       postalCode:
-        this.pickString(payload, ['postal_code', 'zipcode']) ??
-        this.pickString(attributes, ['postal_code', 'zipcode']) ??
-        this.pickString(address, ['postal_code', 'zipcode']),
+        pickClaimString(payload, postalKeys) ??
+        pickClaimString(attributes, postalKeys) ??
+        pickClaimString(address, postalKeys),
       city:
-        this.pickString(payload, ['city', 'locality', 'town']) ??
-        this.pickString(attributes, ['city', 'locality', 'town']) ??
-        this.pickString(address, ['city', 'locality', 'town']),
+        pickClaimString(payload, ['city', 'locality', 'town']) ??
+        pickClaimString(attributes, ['city', 'locality', 'town']) ??
+        pickClaimString(address, ['city', 'locality', 'town']),
     };
-  }
-
-  private pickString(source: Record<string, unknown> | undefined, keys: string[]) {
-    if (!source) return undefined;
-    for (const key of keys) {
-      const value = source[key];
-      if (typeof value === 'string' && value.trim().length > 0) {
-        return value.trim();
-      }
-    }
-    return undefined;
   }
 
   private splitStreetAndHouseNumber(streetAddress?: string) {

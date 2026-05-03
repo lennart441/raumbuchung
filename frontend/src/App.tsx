@@ -22,7 +22,8 @@ type Booking = {
   endAt: string
   status: string
   isOverbooked: boolean
-  note?: string
+  title?: string | null
+  description?: string | null
   room?: { name: string }
   user?: {
     displayName: string
@@ -50,8 +51,14 @@ const api = axios.create({
 const authMode = (import.meta.env.VITE_AUTH_MODE ?? 'oidc').toLowerCase()
 const isOidcMode = authMode === 'oidc'
 
-type Equipment = 'beamer' | 'tv' | 'whiteboard'
 type Recurrence = 'DAILY' | 'WEEKLY' | 'MONTHLY'
+
+type SeriesOccurrencePreview = {
+  startAt: string
+  endAt: string
+  conflict: boolean
+  reason?: string
+}
 
 const roleLabels: Record<Me['role'], string> = {
   USER: 'User',
@@ -62,16 +69,6 @@ const roleLabels: Record<Me['role'], string> = {
 const DAY_START_HOUR = 0
 const DAY_END_HOUR = 24
 const TIMELINE_MINUTES = (DAY_END_HOUR - DAY_START_HOUR) * 60
-
-const roomPalette = [
-  { equipment: ['whiteboard'] as Equipment[] },
-  { equipment: ['beamer', 'whiteboard'] as Equipment[] },
-  { equipment: ['tv'] as Equipment[] },
-  { equipment: ['beamer', 'tv'] as Equipment[] },
-  { equipment: ['beamer', 'tv', 'whiteboard'] as Equipment[] },
-]
-
-type DecoratedRoom = Room & { equipment: Equipment[] }
 
 function toLocalInputValue(date: Date) {
   const year = date.getFullYear()
@@ -118,8 +115,40 @@ function bookingStatusLabel(status: string) {
 }
 
 function displayBookingTitle(booking: Booking | CalendarBooking) {
-  const title = booking.note?.trim()
-  return title && title.length > 0 ? title : 'Termin'
+  const t = booking.title?.trim()
+  return t && t.length > 0 ? t : 'Termin'
+}
+
+function intervalsOverlap(aFrom: Date, aTo: Date, bFrom: Date, bTo: Date) {
+  return aFrom < bTo && aTo > bFrom
+}
+
+function roomAvailableForTimeFilter(
+  roomId: string,
+  selectedDay: string,
+  filterTimeStart: string,
+  filterTimeEnd: string,
+  availabilityByRoom: Record<string, Availability> | undefined,
+): boolean {
+  if (!filterTimeStart || !filterTimeEnd || !availabilityByRoom) return true
+  const dayStart = dayStartFromInput(selectedDay)
+  const [sh, sm] = filterTimeStart.split(':').map(Number)
+  const [eh, em] = filterTimeEnd.split(':').map(Number)
+  if (!Number.isFinite(sh) || !Number.isFinite(eh) || !Number.isFinite(sm) || !Number.isFinite(em)) return true
+  const slotFrom = new Date(dayStart)
+  slotFrom.setHours(sh, sm, 0, 0)
+  const slotTo = new Date(dayStart)
+  slotTo.setHours(eh, em, 0, 0)
+  if (slotTo <= slotFrom) return true
+  const dayData = availabilityByRoom[roomId]
+  if (!dayData) return true
+  for (const b of dayData.bookings ?? []) {
+    if (intervalsOverlap(slotFrom, slotTo, new Date(b.startAt), new Date(b.endAt))) return false
+  }
+  for (const bl of dayData.blocks ?? []) {
+    if (intervalsOverlap(slotFrom, slotTo, new Date(bl.startAt), new Date(bl.endAt))) return false
+  }
+  return true
 }
 
 function formatDayLabel(input: string) {
@@ -146,7 +175,8 @@ function App() {
 
   const [devUser, setDevUser] = useState('mvp-user')
   const [devRole, setDevRole] = useState<Me['role']>('USER')
-  const [equipmentFilter, setEquipmentFilter] = useState<Equipment[]>([])
+  const [filterTimeStart, setFilterTimeStart] = useState('')
+  const [filterTimeEnd, setFilterTimeEnd] = useState('')
   const [selectedDay, setSelectedDay] = useState(toLocalInputValue(dayStartFromInput('')))
   const [selection, setSelection] = useState<{
     roomId: string
@@ -161,10 +191,15 @@ function App() {
   const [roomId, setRoomId] = useState('')
   const [startAt, setStartAt] = useState('')
   const [endAt, setEndAt] = useState('')
-  const [note, setNote] = useState('')
+  const [title, setTitle] = useState('')
+  const [description, setDescription] = useState('')
   const [showRecurrence, setShowRecurrence] = useState(false)
   const [recurrence, setRecurrence] = useState<Recurrence>('WEEKLY')
   const [recurrenceUntil, setRecurrenceUntil] = useState('')
+  const [seriesPreview, setSeriesPreview] = useState<SeriesOccurrencePreview[] | null>(null)
+  const [seriesSkippedStarts, setSeriesSkippedStarts] = useState<string[]>([])
+  const [seriesPreviewLoading, setSeriesPreviewLoading] = useState(false)
+  const [seriesSubmitLoading, setSeriesSubmitLoading] = useState(false)
   const [approvalTabOpen, setApprovalTabOpen] = useState(true)
   const [selectedBookingId, setSelectedBookingId] = useState('')
   const [authError, setAuthError] = useState<string | null>(null)
@@ -267,21 +302,12 @@ function App() {
   const isAdmin = me.data?.role === 'ADMIN'
   const isExtended = me.data?.role === 'EXTENDED_USER'
 
-  const decoratedRooms: DecoratedRoom[] = useMemo(
-    () =>
-      (rooms.data ?? []).map((room, idx) => {
-        const mapped = roomPalette[idx % roomPalette.length]
-        return { ...room, ...mapped }
-      }),
-    [rooms.data],
-  )
-
   const filteredRooms = useMemo(() => {
-    return decoratedRooms.filter((room) => {
-      if (equipmentFilter.length > 0 && !equipmentFilter.every((eq) => room.equipment.includes(eq))) return false
-      return true
-    })
-  }, [decoratedRooms, equipmentFilter])
+    const list = rooms.data ?? []
+    return list.filter((room) =>
+      roomAvailableForTimeFilter(room.id, selectedDay, filterTimeStart, filterTimeEnd, availability.data),
+    )
+  }, [rooms.data, selectedDay, filterTimeStart, filterTimeEnd, availability.data])
 
   const knownBookingsById = useMemo(() => {
     const map = new Map<string, Booking>()
@@ -305,7 +331,8 @@ function App() {
             isOverbooked: booking.isOverbooked,
             room: { name: room.name },
             user: knownBooking?.user,
-            note: isOwnOrVisible ? knownBooking?.note : 'Blockiert',
+            title: isOwnOrVisible ? knownBooking?.title ?? undefined : 'Blockiert',
+            description: isOwnOrVisible ? knownBooking?.description ?? undefined : undefined,
             isMasked: !isOwnOrVisible,
           }
         }),
@@ -316,7 +343,8 @@ function App() {
           status: 'BLOCKED',
           isOverbooked: false,
           room: { name: room.name },
-          note: 'Wartung / Block',
+          title: 'Wartung / Block',
+          description: undefined,
         })),
       ]
       return { room, bookings: merged as CalendarBooking[] }
@@ -347,15 +375,77 @@ function App() {
 
   const createBooking = async () => {
     if (!roomId || !startAt || !endAt) return
-    await api.post('/bookings', { roomId, startAt, endAt, note }, { headers })
+    if (showRecurrence) return
+    await api.post('/bookings', { roomId, startAt, endAt, title, description }, { headers })
     await refreshAll()
-    setNote('')
+    setTitle('')
+    setDescription('')
     setModalOpen(false)
+  }
+
+  const loadSeriesPreview = async () => {
+    if (!roomId || !startAt || !endAt || !recurrenceUntil) return
+    setSeriesPreviewLoading(true)
+    try {
+      const res = await api.post<{ occurrences: SeriesOccurrencePreview[] }>(
+        '/bookings/series/preview',
+        {
+          roomId,
+          startAt,
+          endAt,
+          recurrence,
+          until: recurrenceUntil,
+          title: title || undefined,
+          description: description || undefined,
+        },
+        { headers },
+      )
+      setSeriesPreview(res.data.occurrences)
+      setSeriesSkippedStarts([])
+    } finally {
+      setSeriesPreviewLoading(false)
+    }
+  }
+
+  const createSeriesBookings = async () => {
+    if (!roomId || !startAt || !endAt || !recurrenceUntil) return
+    setSeriesSubmitLoading(true)
+    try {
+      await api.post(
+        '/bookings/series',
+        {
+          roomId,
+          startAt,
+          endAt,
+          recurrence,
+          until: recurrenceUntil,
+          title: title || undefined,
+          description: description || undefined,
+          skipStartAts: seriesSkippedStarts,
+        },
+        { headers },
+      )
+      await refreshAll()
+      setTitle('')
+      setDescription('')
+      setSeriesPreview(null)
+      setSeriesSkippedStarts([])
+      setShowRecurrence(false)
+      setModalOpen(false)
+    } finally {
+      setSeriesSubmitLoading(false)
+    }
+  }
+
+  const toggleSeriesSkipRow = (startIso: string) => {
+    setSeriesSkippedStarts((prev) =>
+      prev.includes(startIso) ? prev.filter((s) => s !== startIso) : [...prev, startIso],
+    )
   }
 
   const saveBookingEdits = async () => {
     if (!selectedBooking || !editingBookingId || !roomId || !startAt || !endAt) return
-    await api.patch(`/bookings/${editingBookingId}`, { roomId, startAt, endAt, note }, { headers })
+    await api.patch(`/bookings/${editingBookingId}`, { roomId, startAt, endAt, title, description }, { headers })
     await refreshAll()
     setDetailsOpen(false)
     setEditingBookingId(null)
@@ -396,13 +486,7 @@ function App() {
     setIsDevLoggedIn(false)
   }
 
-  const handleEquipmentToggle = (equipment: Equipment) => {
-    setEquipmentFilter((current) =>
-      current.includes(equipment) ? current.filter((entry) => entry !== equipment) : [...current, equipment],
-    )
-  }
-
-  const openModalForSelection = (room: DecoratedRoom, fromPx: number, toPx: number, width: number) => {
+  const openModalForSelection = (room: Room, fromPx: number, toPx: number, width: number) => {
     const startMinutes = Math.floor(Math.min(pxToMinutes(fromPx, width), pxToMinutes(toPx, width)) / 15) * 15
     const endMinutes = Math.ceil(Math.max(pxToMinutes(fromPx, width), pxToMinutes(toPx, width)) / 15) * 15
     const dayStart = dayStartFromInput(selectedDay)
@@ -411,16 +495,20 @@ function App() {
     setRoomId(room.id)
     setStartAt(toLocalInputValue(start))
     setEndAt(toLocalInputValue(end))
-    setNote('')
+    setTitle('')
+    setDescription('')
+    setSeriesPreview(null)
+    setSeriesSkippedStarts([])
     setModalOpen(true)
   }
 
-  const openDetails = (booking: Booking, room: DecoratedRoom) => {
+  const openDetails = (booking: Booking, room: Room) => {
     setSelectedBookingId(booking.id)
     setRoomId(rooms.data?.find((r) => r.name === room.name)?.id ?? '')
     setStartAt(toLocalInputValue(new Date(booking.startAt)))
     setEndAt(toLocalInputValue(new Date(booking.endAt)))
-    setNote(booking.note ?? '')
+    setTitle(booking.title ?? '')
+    setDescription(booking.description ?? '')
     setDetailsOpen(true)
     setEditingBookingId(null)
   }
@@ -549,14 +637,27 @@ function App() {
               />
             </div>
             <div>
-              <label className="mb-2 block text-sm font-medium">Equipment</label>
-              <div className="space-y-2 text-sm">
-                {(['beamer', 'tv', 'whiteboard'] as Equipment[]).map((item) => (
-                  <label key={item} className="flex items-center gap-2">
-                    <input type="checkbox" checked={equipmentFilter.includes(item)} onChange={() => handleEquipmentToggle(item)} />
-                    {item}
-                  </label>
-                ))}
+              <label className="mb-1 block text-sm font-medium">Verfuegbarkeit (Uhrzeit)</label>
+              <p className="mb-2 text-xs text-slate-500">Nur Räume anzeigen, die am gewählten Tag im Zeitraum frei sind. Leer lassen für alle Räume.</p>
+              <div className="grid grid-cols-2 gap-2">
+                <label className="text-xs">
+                  <span className="mb-1 block">Von</span>
+                  <input
+                    type="time"
+                    className="w-full rounded-lg border border-slate-300 p-2"
+                    value={filterTimeStart}
+                    onChange={(e) => setFilterTimeStart(e.target.value)}
+                  />
+                </label>
+                <label className="text-xs">
+                  <span className="mb-1 block">Bis</span>
+                  <input
+                    type="time"
+                    className="w-full rounded-lg border border-slate-300 p-2"
+                    value={filterTimeEnd}
+                    onChange={(e) => setFilterTimeEnd(e.target.value)}
+                  />
+                </label>
               </div>
             </div>
           </div>
@@ -575,14 +676,27 @@ function App() {
             />
           </div>
           <div>
-            <label className="mb-2 block text-sm font-medium">Equipment</label>
-            <div className="space-y-2 text-sm">
-              {(['beamer', 'tv', 'whiteboard'] as Equipment[]).map((item) => (
-                <label key={item} className="flex items-center gap-2">
-                  <input type="checkbox" checked={equipmentFilter.includes(item)} onChange={() => handleEquipmentToggle(item)} />
-                  {item}
-                </label>
-              ))}
+            <label className="mb-1 block text-sm font-medium">Verfuegbarkeit (Uhrzeit)</label>
+            <p className="mb-2 text-xs text-slate-500">Leer lassen, um alle Räume anzuzeigen.</p>
+            <div className="grid grid-cols-2 gap-2">
+              <label className="text-xs">
+                <span className="mb-1 block">Von</span>
+                <input
+                  type="time"
+                  className="w-full rounded-lg border border-slate-300 p-2"
+                  value={filterTimeStart}
+                  onChange={(e) => setFilterTimeStart(e.target.value)}
+                />
+              </label>
+              <label className="text-xs">
+                <span className="mb-1 block">Bis</span>
+                <input
+                  type="time"
+                  className="w-full rounded-lg border border-slate-300 p-2"
+                  value={filterTimeEnd}
+                  onChange={(e) => setFilterTimeEnd(e.target.value)}
+                />
+              </label>
             </div>
           </div>
         </aside>
@@ -738,6 +852,11 @@ function App() {
               className="w-full rounded-lg bg-teal-700 px-3 py-2 font-medium text-white"
               onClick={() => {
                 setEditingBookingId(null)
+                setTitle('')
+                setDescription('')
+                setSeriesPreview(null)
+                setSeriesSkippedStarts([])
+                setShowRecurrence(false)
                 setModalOpen(true)
               }}
               title={isExtended ? 'Erstellt sofort eine bestaetigte Buchung' : 'Sendet eine Buchungsanfrage zur Pruefung'}
@@ -809,6 +928,11 @@ function App() {
             className="w-full rounded-lg bg-teal-700 px-3 py-2 font-medium text-white"
             onClick={() => {
               setEditingBookingId(null)
+              setTitle('')
+              setDescription('')
+              setSeriesPreview(null)
+              setSeriesSkippedStarts([])
+              setShowRecurrence(false)
               setModalOpen(true)
             }}
             title={isExtended ? 'Erstellt sofort eine bestaetigte Buchung' : 'Sendet eine Buchungsanfrage zur Pruefung'}
@@ -875,14 +999,14 @@ function App() {
 
       {modalOpen && (
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/35 p-4">
-          <div className="w-full max-w-xl rounded-2xl bg-white p-5 shadow-xl">
+          <div className="max-h-[90vh] w-full max-w-xl overflow-y-auto rounded-2xl bg-white p-5 shadow-xl">
             <h3 className="text-lg font-semibold">Buchung anfragen</h3>
             <div className="mt-3 grid gap-3 md:grid-cols-2">
               <label className="text-sm">
                 <span className="mb-1 block text-slate-700">Raum</span>
                 <select className="w-full rounded border p-2" value={roomId} onChange={(e) => setRoomId(e.target.value)}>
                   <option value="">Raum waehlen</option>
-                  {decoratedRooms.map((room) => (
+                  {(rooms.data ?? []).map((room) => (
                     <option key={room.id} value={room.id}>
                       {room.name}
                     </option>
@@ -890,41 +1014,137 @@ function App() {
                 </select>
               </label>
               <label className="text-sm">
-                <span className="mb-1 block text-slate-700">Startdatum</span>
+                <span className="mb-1 block text-slate-700">Start (erster Termin)</span>
                 <input className="w-full rounded border p-2" type="datetime-local" value={startAt} onChange={(e) => setStartAt(e.target.value)} />
               </label>
               <label className="text-sm">
-                <span className="mb-1 block text-slate-700">Enddatum</span>
+                <span className="mb-1 block text-slate-700">Ende (erster Termin)</span>
                 <input className="w-full rounded border p-2" type="datetime-local" value={endAt} onChange={(e) => setEndAt(e.target.value)} />
               </label>
               <label className="text-sm md:col-span-2">
                 <span className="mb-1 block text-slate-700">Titel</span>
-                <input className="w-full rounded border p-2" value={note} onChange={(e) => setNote(e.target.value)} />
+                <input className="w-full rounded border p-2" value={title} onChange={(e) => setTitle(e.target.value)} />
+              </label>
+              <label className="text-sm md:col-span-2">
+                <span className="mb-1 block text-slate-700">Terminbeschreibung</span>
+                <textarea
+                  className="min-h-24 w-full rounded border p-2"
+                  value={description}
+                  onChange={(e) => setDescription(e.target.value)}
+                  rows={4}
+                />
               </label>
             </div>
 
             <label className="mt-3 flex items-center gap-2 text-sm">
-              <input type="checkbox" checked={showRecurrence} onChange={(e) => setShowRecurrence(e.target.checked)} />
+              <input
+                type="checkbox"
+                checked={showRecurrence}
+                onChange={(e) => {
+                  const on = e.target.checked
+                  setShowRecurrence(on)
+                  if (!on) {
+                    setSeriesPreview(null)
+                    setSeriesSkippedStarts([])
+                  }
+                }}
+              />
               Serienbuchung aktivieren
             </label>
             {showRecurrence && (
-              <div className="mt-2 grid gap-2 md:grid-cols-2">
-                <select className="rounded border p-2" value={recurrence} onChange={(e) => setRecurrence(e.target.value as Recurrence)}>
-                  <option value="DAILY">Taeglich</option>
-                  <option value="WEEKLY">Woechentlich</option>
-                  <option value="MONTHLY">Monatlich</option>
-                </select>
-                <input className="rounded border p-2" type="date" value={recurrenceUntil} onChange={(e) => setRecurrenceUntil(e.target.value)} />
+              <div className="mt-2 space-y-3">
+                <div className="grid gap-2 md:grid-cols-2">
+                  <label className="text-xs md:col-span-2">
+                    <span className="mb-1 block text-sm text-slate-700">Wiederholung</span>
+                    <select className="w-full rounded border p-2" value={recurrence} onChange={(e) => setRecurrence(e.target.value as Recurrence)}>
+                      <option value="DAILY">Taeglich</option>
+                      <option value="WEEKLY">Woechentlich</option>
+                      <option value="MONTHLY">Monatlich</option>
+                    </select>
+                  </label>
+                  <label className="text-xs md:col-span-2">
+                    <span className="mb-1 block text-sm text-slate-700">Serie bis (Datum inklusive)</span>
+                    <input className="w-full rounded border p-2" type="date" value={recurrenceUntil} onChange={(e) => setRecurrenceUntil(e.target.value)} />
+                  </label>
+                </div>
+                <button
+                  type="button"
+                  className="w-full rounded border border-teal-700 px-3 py-2 text-sm text-teal-800"
+                  disabled={seriesPreviewLoading || !roomId || !startAt || !endAt || !recurrenceUntil}
+                  onClick={() => void loadSeriesPreview()}
+                >
+                  {seriesPreviewLoading ? 'Vorschau laedt...' : 'Vorschau laden'}
+                </button>
+                {seriesPreview && seriesPreview.length > 0 && (
+                  <div className="rounded-lg border border-slate-200">
+                    <div className="max-h-52 overflow-y-auto text-xs">
+                      <table className="w-full border-collapse text-left">
+                        <thead className="sticky top-0 bg-slate-100">
+                          <tr>
+                            <th className="border-b p-2">Beginn</th>
+                            <th className="border-b p-2">Konflikt</th>
+                            <th className="border-b p-2">Auslassen</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {seriesPreview.map((row) => {
+                            const checked = seriesSkippedStarts.includes(row.startAt)
+                            return (
+                              <tr key={row.startAt} className={row.conflict ? 'bg-rose-50' : ''}>
+                                <td className="border-b p-2">{new Date(row.startAt).toLocaleString('de-DE')}</td>
+                                <td className="border-b p-2">
+                                  {row.conflict ? (
+                                    <span title={row.reason ?? ''}>Ja</span>
+                                  ) : (
+                                    'Nein'
+                                  )}
+                                </td>
+                                <td className="border-b p-2 text-center">
+                                  {row.conflict ? (
+                                    <span className="text-slate-500" title="Wird nicht gebucht">
+                                      —
+                                    </span>
+                                  ) : (
+                                    <input
+                                      type="checkbox"
+                                      checked={checked}
+                                      title="Diesen freien Termin auslassen"
+                                      onChange={() => toggleSeriesSkipRow(row.startAt)}
+                                    />
+                                  )}
+                                </td>
+                              </tr>
+                            )
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                    <p className="border-t p-2 text-xs text-slate-600">
+                      Konflikttermine werden nicht gebucht. Freie Termine koennen Sie optional per Checkbox auslassen.
+                    </p>
+                  </div>
+                )}
               </div>
             )}
 
-            <div className="mt-4 flex justify-end gap-2">
+            <div className="mt-4 flex flex-wrap justify-end gap-2">
               <button className="rounded border px-3 py-2" onClick={() => setModalOpen(false)}>
                 Abbrechen
               </button>
-              <button className="rounded bg-teal-700 px-3 py-2 text-white" onClick={createBooking}>
-                {isExtended ? 'Direkt buchen' : 'Anfrage senden'}
-              </button>
+              {showRecurrence ? (
+                <button
+                  type="button"
+                  className="rounded bg-teal-700 px-3 py-2 text-white disabled:opacity-50"
+                  disabled={seriesSubmitLoading || !seriesPreview}
+                  onClick={() => void createSeriesBookings()}
+                >
+                  {seriesSubmitLoading ? 'Speichern...' : isExtended ? 'Serie direkt buchen' : 'Serie anfragen'}
+                </button>
+              ) : (
+                <button type="button" className="rounded bg-teal-700 px-3 py-2 text-white" onClick={() => void createBooking()}>
+                  {isExtended ? 'Direkt buchen' : 'Anfrage senden'}
+                </button>
+              )}
             </div>
           </div>
         </div>
@@ -938,6 +1158,14 @@ function App() {
               <div>
                 <strong>Titel:</strong> {displayBookingTitle(selectedBooking)}
               </div>
+              {selectedBooking.description?.trim() ? (
+                <div>
+                  <strong>Beschreibung:</strong>
+                  <div className="mt-1 whitespace-pre-wrap rounded border border-slate-100 bg-slate-50 p-2 text-slate-800">
+                    {selectedBooking.description}
+                  </div>
+                </div>
+              ) : null}
               <div>
                 <strong>Status:</strong> {bookingStatusLabel(selectedBooking.status)}
               </div>
@@ -975,11 +1203,6 @@ function App() {
                   </div>
                 </>
               )}
-              {selectedBooking.note && (
-                <div>
-                  <strong>Notiz:</strong> {selectedBooking.note}
-                </div>
-              )}
             </div>
 
             {canEditSelected && (
@@ -991,7 +1214,8 @@ function App() {
                     setRoomId(rooms.data?.find((room) => room.name === selectedBooking.room?.name)?.id ?? '')
                     setStartAt(toLocalInputValue(new Date(selectedBooking.startAt)))
                     setEndAt(toLocalInputValue(new Date(selectedBooking.endAt)))
-                    setNote(selectedBooking.note ?? '')
+                    setTitle(selectedBooking.title ?? '')
+                    setDescription(selectedBooking.description ?? '')
                   }}
                 >
                   Termin bearbeiten
@@ -1000,7 +1224,7 @@ function App() {
                   <div className="grid gap-2 md:grid-cols-2">
                     <select className="rounded border p-2" value={roomId} onChange={(e) => setRoomId(e.target.value)}>
                       <option value="">Raum waehlen</option>
-                      {decoratedRooms.map((room) => (
+                      {(rooms.data ?? []).map((room) => (
                         <option key={room.id} value={room.id}>
                           {room.name}
                         </option>
@@ -1008,7 +1232,14 @@ function App() {
                     </select>
                     <input className="rounded border p-2" type="datetime-local" value={startAt} onChange={(e) => setStartAt(e.target.value)} />
                     <input className="rounded border p-2" type="datetime-local" value={endAt} onChange={(e) => setEndAt(e.target.value)} />
-                    <input className="rounded border p-2 md:col-span-2" value={note} onChange={(e) => setNote(e.target.value)} placeholder="Titel" />
+                    <input className="rounded border p-2 md:col-span-2" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Titel" />
+                    <textarea
+                      className="min-h-20 rounded border p-2 md:col-span-2"
+                      value={description}
+                      onChange={(e) => setDescription(e.target.value)}
+                      placeholder="Beschreibung"
+                      rows={3}
+                    />
                     <button className="rounded bg-teal-700 px-3 py-2 text-white md:col-span-2" onClick={saveBookingEdits}>
                       Aenderungen speichern
                     </button>
