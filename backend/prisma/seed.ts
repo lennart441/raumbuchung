@@ -30,12 +30,44 @@ async function main() {
   }
 
   await prisma.user.upsert({
+    where: { authentikSub: 'dev-user' },
+    update: {
+      role: UserRole.USER,
+      email: 'user@local.dev',
+      displayName: 'Dev Standardnutzer',
+    },
+    create: {
+      authentikSub: 'dev-user',
+      email: 'user@local.dev',
+      displayName: 'Dev Standardnutzer',
+      role: UserRole.USER,
+    },
+  });
+  await prisma.user.upsert({
+    where: { authentikSub: 'dev-extended-user' },
+    update: {
+      role: UserRole.EXTENDED_USER,
+      email: 'extended-user@local.dev',
+      displayName: 'Dev Erweiterter Nutzer',
+    },
+    create: {
+      authentikSub: 'dev-extended-user',
+      email: 'extended-user@local.dev',
+      displayName: 'Dev Erweiterter Nutzer',
+      role: UserRole.EXTENDED_USER,
+    },
+  });
+  await prisma.user.upsert({
     where: { authentikSub: 'dev-admin' },
-    update: { role: UserRole.ADMIN, email: 'admin@local.dev', displayName: 'Admin' },
+    update: {
+      role: UserRole.ADMIN,
+      email: 'admin@local.dev',
+      displayName: 'Dev Administrator',
+    },
     create: {
       authentikSub: 'dev-admin',
       email: 'admin@local.dev',
-      displayName: 'Admin',
+      displayName: 'Dev Administrator',
       role: UserRole.ADMIN,
     },
   });

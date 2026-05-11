@@ -4,12 +4,12 @@
 - Frontend: React + Vite + Tailwind + PWA shell
 - Backend: NestJS + Prisma
 - DB: PostgreSQL (Docker Compose)
-- Auth: Authentik (OIDC/JWT), lokal optional `x-dev-user` Header im `AUTH_MODE=dev`
+- Auth: Authentik (OIDC/JWT) wenn `DEV=false`; bei `DEV=true` Mock-Login ohne Authentik (Header `x-dev-role`)
 
 ## Docker Start (nativ in Containern)
 1. Optional `.env` für Compose anlegen:
    - `cp .env.example .env`
-   - Werte für `FRONTEND_ORIGIN`, `VITE_API_URL`, `AUTHENTIK_OIDC_ISSUER`, `AUTHENTIK_OIDC_CLIENT_ID`, `AUTHENTIK_OIDC_AUDIENCE`, `AUTHENTIK_OIDC_APP_ORIGIN` und ggf. Mailcow SMTP (`MAIL_*`) setzen
+   - `DEV=true` oder `DEV=false`; bei `DEV=false` u. a. `FRONTEND_ORIGIN`, `VITE_API_URL`, `AUTHENTIK_OIDC_*` und ggf. Mailcow SMTP (`MAIL_*`) setzen
 2. Starten:
    - `docker compose up --build -d`
 3. Aufrufen:
@@ -23,9 +23,10 @@
 Beim Backend-Start werden Migrationen automatisch ausgeführt und Seed-Daten angelegt.
 
 ## Auth Konfiguration (Production-Ready)
-- `AUTH_MODE=oidc` fuer Produktion (dev-header login ist dann deaktiviert)
-- `AUTH_MODE=dev` nur fuer lokale Entwicklung
-- Pflichtwerte fuer OIDC (compose):
+- `DEV=false` fuer echte Anmeldung ueber Authentik (OIDC)
+- `DEV=true` fuer lokalen Mock-Login (Rollenwahl im UI, feste Konten `dev-user`, `dev-extended-user`, `dev-admin`); dann sind keine gueltigen `AUTHENTIK_OIDC_*` Werte fuer den Login erforderlich
+- Das Frontend liest den Modus von `GET /api/auth/config` (gleiche `DEV`-Variable wie das Backend)
+- Pflichtwerte fuer OIDC nur wenn `DEV=false`:
   - `AUTHENTIK_OIDC_ISSUER`
   - `AUTHENTIK_OIDC_CLIENT_ID`
   - `AUTHENTIK_OIDC_AUDIENCE`
@@ -40,11 +41,17 @@ Beim Backend-Start werden Migrationen automatisch ausgeführt und Seed-Daten ang
   - `AUTHENTIK_OIDC_SCOPE` (Default `openid profile email phone`)
 
 ## Lokaler Dev-Mode (ohne Container)
-- `cp backend/.env.example backend/.env`
-- `cp frontend/.env.example frontend/.env`
+- `cp backend/.env.example backend/.env` und `DEV=true` setzen
+- `cp frontend/.env.example frontend/.env` (optional `VITE_DEV=true`, falls `/api/auth/config` nicht erreichbar)
 - `docker compose up -d db`
 - `cd backend && npm run prisma:generate && npm run prisma:migrate && npm run prisma:seed && npm run start:dev`
 - `cd frontend && npm run dev`
+
+### Frontend und Backend auf verschiedenen Ports (ohne Reverse-Proxy)
+- Vite laedt Umgebungsvariablen aus **Projektwurzel** `.env` und aus **`frontend/.env`** (letztere ueberschreibt).
+- **Variante A:** direkte URL zum API-Prefix, z. B. `VITE_API_URL=http://localhost:3000/api`. CORS: in Development sind die gaengigen lokalen Origins (Vite `:5173`, Docker-UI `:8080`, `localhost` und `127.0.0.1`) immer erlaubt, zusaetzlich zu `FRONTEND_ORIGIN`.
+- **Variante B:** relativer Pfad; Vite-Dev-Server proxied `/api` zum Backend (Standardziel `http://127.0.0.1:3000`, uebersteuerbar):
+  - `VITE_API_URL=/api` und optional `VITE_BACKEND_ORIGIN=http://localhost:3000`
 
 ## Rollen
 - `USER`: Buchung immer `PENDING`
@@ -76,11 +83,14 @@ Beim Backend-Start werden Migrationen automatisch ausgeführt und Seed-Daten ang
 - `POST /api/admin/users/:id/ban-room/:roomId`
 
 ## Auth Smoke-Checks
-- Gueltiger Token:
+- Modus:
+  - `curl http://localhost:3000/api/auth/config` liefert `{"dev":true}` oder `{"dev":false}`
+- Gueltiger Token (nur `DEV=false`):
   - `curl -H "Authorization: Bearer <token>" http://localhost:3000/api/auth/me`
 - Falsche Audience oder abgelaufener Token:
   - erwartet `401`
-- Dev-Header in OIDC-Modus:
-  - `AUTH_MODE=oidc`
-  - `curl -H "x-dev-user: test" http://localhost:3000/api/auth/me`
+- Mock-Rolle (nur `DEV=true`):
+  - `curl -H "x-dev-role: ADMIN" http://localhost:3000/api/auth/me`
+- Mock-Header bei `DEV=false`:
+  - `curl -H "x-dev-role: ADMIN" http://localhost:3000/api/auth/me`
   - erwartet `401`

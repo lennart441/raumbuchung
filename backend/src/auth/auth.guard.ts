@@ -9,6 +9,7 @@ import { ConfigService } from '@nestjs/config';
 import { createRemoteJWKSet, jwtVerify, JWTPayload } from 'jose';
 import { Request } from 'express';
 import { AuthUser } from './request-user';
+import { isDevAuthEnabled } from './dev-auth.config';
 import { resolveRoleFromClaims } from './role-resolution';
 import { AuthentikProfileService } from './authentik-profile.service';
 import {
@@ -18,7 +19,6 @@ import {
 } from './profile-claim.util';
 
 type RequestWithUser = Request & { user?: AuthUser };
-type AuthMode = 'dev' | 'oidc';
 
 @Injectable()
 export class AuthGuard implements CanActivate {
@@ -34,24 +34,23 @@ export class AuthGuard implements CanActivate {
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const req = context.switchToHttp().getRequest<RequestWithUser>();
     const authHeader = req.header('authorization');
-    const devHeader = req.header('x-dev-user');
-    const mode = this.getAuthMode();
+    const devRoleHeader = req.header('x-dev-role');
+    const legacyDevUser = req.header('x-dev-user');
+    const devEnabled = isDevAuthEnabled(this.config);
 
-    if (mode === 'dev' && !authHeader && devHeader) {
-      req.user = {
-        sub: `dev-${devHeader}`,
-        email: `${devHeader}@local.dev`,
-        name: devHeader,
-        role: (req.header('x-dev-role') as AuthUser['role']) ?? 'USER',
-      };
-      this.logAuth('dev-header-auth', req, req.user.sub);
-      return true;
+    if (devEnabled && !authHeader) {
+      const parsed = this.parseDevRoleHeader(devRoleHeader);
+      if (parsed) {
+        req.user = this.syntheticDevUser(parsed);
+        this.logAuth('dev-role-auth', req, req.user.sub);
+        return true;
+      }
     }
 
-    if (mode === 'oidc' && devHeader && !authHeader) {
+    if (!devEnabled && (legacyDevUser || devRoleHeader) && !authHeader) {
       this.logAuth('dev-header-rejected', req);
       throw new UnauthorizedException(
-        'Dev-Header sind im OIDC-Modus deaktiviert',
+        'Mock-Anmeldung ist deaktiviert (DEV=false)',
       );
     }
 
@@ -137,11 +136,31 @@ export class AuthGuard implements CanActivate {
     };
   }
 
-  private getAuthMode(): AuthMode {
-    const rawMode = this.config.get<string>('AUTH_MODE');
-    if (rawMode === 'dev' || rawMode === 'oidc') return rawMode;
-    const nodeEnv = this.config.get<string>('NODE_ENV');
-    return nodeEnv === 'production' ? 'oidc' : 'dev';
+  private parseDevRoleHeader(
+    raw: string | undefined,
+  ): 'USER' | 'EXTENDED_USER' | 'ADMIN' | undefined {
+    if (!raw?.trim()) return undefined;
+    const upper = raw.trim().toUpperCase();
+    if (upper === 'USER' || upper === 'EXTENDED_USER' || upper === 'ADMIN') {
+      return upper;
+    }
+    return undefined;
+  }
+
+  private syntheticDevUser(role: 'USER' | 'EXTENDED_USER' | 'ADMIN'): AuthUser {
+    const slug =
+      role === 'ADMIN' ? 'admin' : role === 'EXTENDED_USER' ? 'extended-user' : 'user';
+    const nameByRole: Record<'USER' | 'EXTENDED_USER' | 'ADMIN', string> = {
+      USER: 'Dev Standardnutzer',
+      EXTENDED_USER: 'Dev Erweiterter Nutzer',
+      ADMIN: 'Dev Administrator',
+    };
+    return {
+      sub: `dev-${slug}`,
+      email: `${slug}@local.dev`,
+      name: nameByRole[role],
+      role,
+    };
   }
 
   private getJwks(issuer: string) {

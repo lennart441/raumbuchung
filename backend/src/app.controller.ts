@@ -10,6 +10,7 @@ import {
   Req,
   UseGuards,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import {
   IsArray,
   IsDateString,
@@ -23,6 +24,7 @@ import { AuthGuard } from './auth/auth.guard';
 import { RolesGuard } from './auth/roles.guard';
 import { Roles } from './auth/roles.decorator';
 import { AuthUser } from './auth/request-user';
+import { isDevAuthEnabled } from './auth/dev-auth.config';
 
 type RequestWithUser = { user: AuthUser };
 
@@ -126,11 +128,19 @@ class UserBanDto {
 
 @Controller()
 export class AppController {
-  constructor(private readonly appService: AppService) {}
+  constructor(
+    private readonly appService: AppService,
+    private readonly config: ConfigService,
+  ) {}
 
   @Get()
   getHealth() {
     return this.appService.getHealth();
+  }
+
+  @Get('auth/config')
+  authConfig() {
+    return { dev: isDevAuthEnabled(this.config) };
   }
 
   @UseGuards(AuthGuard)

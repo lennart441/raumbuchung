@@ -2,6 +2,7 @@ import { type PointerEvent as ReactPointerEvent, useEffect, useMemo, useState } 
 import { useQuery } from '@tanstack/react-query'
 import axios from 'axios'
 import { UserManager, WebStorageStateStore } from 'oidc-client-ts'
+import { getApiBaseUrl } from './api-base'
 
 type Me = {
   id: string
@@ -45,11 +46,13 @@ type Availability = {
 }
 
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_URL ?? 'http://localhost:3000/api',
+  baseURL: getApiBaseUrl(),
 })
 
-const authMode = (import.meta.env.VITE_AUTH_MODE ?? 'oidc').toLowerCase()
-const isOidcMode = authMode === 'oidc'
+function viteDevFallback(): boolean {
+  const v = (import.meta.env.VITE_DEV as string | undefined)?.trim().toLowerCase()
+  return v === 'true' || v === '1' || v === 'yes'
+}
 
 type Recurrence = 'DAILY' | 'WEEKLY' | 'MONTHLY'
 
@@ -61,9 +64,9 @@ type SeriesOccurrencePreview = {
 }
 
 const roleLabels: Record<Me['role'], string> = {
-  USER: 'User',
-  EXTENDED_USER: 'Extended',
-  ADMIN: 'Admin',
+  USER: 'Standardnutzer',
+  EXTENDED_USER: 'Erweiterter Nutzer',
+  ADMIN: 'Administrator',
 }
 
 const DAY_START_HOUR = 0
@@ -169,11 +172,11 @@ function formatBirthDate(input?: string | null) {
 }
 
 function App() {
-  const [selectedRole, setSelectedRole] = useState<Me['role']>('USER')
+  const [authDev, setAuthDev] = useState<boolean | null>(null)
+  const [devRolePickerOpen, setDevRolePickerOpen] = useState(false)
   const [isDevLoggedIn, setIsDevLoggedIn] = useState(false)
   const [oidcToken, setOidcToken] = useState<string | null>(null)
 
-  const [devUser, setDevUser] = useState('mvp-user')
   const [devRole, setDevRole] = useState<Me['role']>('USER')
   const [filterTimeStart, setFilterTimeStart] = useState('')
   const [filterTimeEnd, setFilterTimeEnd] = useState('')
@@ -204,6 +207,16 @@ function App() {
   const [selectedBookingId, setSelectedBookingId] = useState('')
   const [authError, setAuthError] = useState<string | null>(null)
 
+  const isOidcMode = authDev === false
+
+  useEffect(() => {
+    const base = getApiBaseUrl()
+    void axios
+      .get<{ dev: boolean }>(`${base}/auth/config`)
+      .then((res) => setAuthDev(res.data.dev))
+      .catch(() => setAuthDev(viteDevFallback()))
+  }, [])
+
   const oidcManager = useMemo(() => {
     if (!isOidcMode) return null
     const authority =
@@ -230,7 +243,7 @@ function App() {
         'openid profile email',
       userStore: new WebStorageStateStore({ store: window.sessionStorage }),
     })
-  }, [])
+  }, [isOidcMode])
 
   useEffect(() => {
     if (!isOidcMode || !oidcManager) return
@@ -250,14 +263,15 @@ function App() {
       }
     }
     void bootstrap()
-  }, [oidcManager])
+  }, [oidcManager, isOidcMode])
 
   const isLoggedIn = isOidcMode ? Boolean(oidcToken) : isDevLoggedIn
 
   const headers = useMemo(() => {
     if (isOidcMode && oidcToken) return { authorization: `Bearer ${oidcToken}` }
-    return { 'x-dev-user': devUser, 'x-dev-role': devRole }
-  }, [devRole, devUser, oidcToken])
+    if (!isOidcMode && isLoggedIn) return { 'x-dev-role': devRole }
+    return {}
+  }, [devRole, isLoggedIn, isOidcMode, oidcToken])
 
   const me = useQuery({
     queryKey: ['me', headers],
@@ -465,15 +479,19 @@ function App() {
     await refreshAll()
   }
 
-  const handleRoleLogin = () => {
-    setDevRole(selectedRole)
-    setDevUser(selectedRole === 'ADMIN' ? 'mvp-admin' : selectedRole === 'EXTENDED_USER' ? 'mvp-power-user' : 'mvp-user')
-    setIsDevLoggedIn(true)
+  const handleGemeindeLogin = async () => {
+    if (isOidcMode) {
+      if (!oidcManager) return
+      await oidcManager.signinRedirect()
+      return
+    }
+    setDevRolePickerOpen(true)
   }
 
-  const handleOidcLogin = async () => {
-    if (!oidcManager) return
-    await oidcManager.signinRedirect()
+  const handleDevRoleChoice = (role: Me['role']) => {
+    setDevRole(role)
+    setIsDevLoggedIn(true)
+    setDevRolePickerOpen(false)
   }
 
   const handleLogout = async () => {
@@ -483,6 +501,7 @@ function App() {
       await oidcManager.signoutRedirect()
       return
     }
+    setDevRolePickerOpen(false)
     setIsDevLoggedIn(false)
   }
 
@@ -528,44 +547,61 @@ function App() {
   }
 
   if (!isLoggedIn) {
+    if (authDev === null) {
+      return (
+        <main className="min-h-screen bg-slate-100 p-4 sm:p-6">
+          <div className="mx-auto mt-16 max-w-md text-center text-sm text-slate-600">Lade Anmeldeoptionen …</div>
+        </main>
+      )
+    }
     return (
       <main className="min-h-screen bg-slate-100 p-4 sm:p-6">
         <div className="mx-auto mt-10 max-w-md rounded-2xl bg-white p-6 shadow sm:mt-16">
           <h1 className="text-2xl font-semibold">Gemeinde Stocksee</h1>
           <p className="mt-1 text-sm text-slate-600">Raumbuchung</p>
-          {isOidcMode ? (
-            <>
-              <p className="mt-2 text-xs text-slate-500">Anmeldung ueber Authentik (OIDC/PKCE).</p>
-              {!oidcManager && (
-                <p className="mt-2 text-xs text-rose-700">
-                  OIDC ist aktiv, aber `VITE_AUTHENTIK_OIDC_*` ist unvollstaendig konfiguriert.
-                </p>
-              )}
-              {authError && <p className="mt-2 text-xs text-rose-700">{authError}</p>}
-              <button className="mt-5 w-full rounded-lg bg-teal-700 px-3 py-2 font-medium text-white" onClick={handleOidcLogin}>
-                Mit Gemeinde Stocksee Konto anmelden
-              </button>
-            </>
+          <p className="mt-2 text-xs text-slate-500">
+            {isOidcMode
+              ? 'Anmeldung ueber Authentik (OIDC/PKCE).'
+              : 'Entwicklungsmodus (DEV=true): keine Authentik-Konfiguration noetig.'}
+          </p>
+          {isOidcMode && !oidcManager && (
+            <p className="mt-2 text-xs text-rose-700">
+              OIDC ist aktiv, aber `VITE_AUTHENTIK_OIDC_*` ist unvollstaendig konfiguriert.
+            </p>
+          )}
+          {authError && <p className="mt-2 text-xs text-rose-700">{authError}</p>}
+          {!devRolePickerOpen ? (
+            <button
+              type="button"
+              className="mt-5 w-full rounded-lg bg-teal-700 px-3 py-2 font-medium text-white"
+              onClick={() => void handleGemeindeLogin()}
+            >
+              Mit Gemeinde Stocksee Konto anmelden
+            </button>
           ) : (
-            <>
-              <p className="mt-2 text-xs text-slate-500">Demo-Login (ohne echtes Auth). Bitte Rolle auswaehlen.</p>
-              <div className="mt-5 space-y-2">
+            <div className="mt-5 space-y-3">
+              <p className="text-sm font-medium text-slate-800">Als welche Rolle anmelden?</p>
+              <p className="text-xs text-slate-500">Nur fuer lokale Entwicklung; es werden feste Dev-Konten verwendet.</p>
+              <div className="space-y-2">
                 {(['USER', 'EXTENDED_USER', 'ADMIN'] as Me['role'][]).map((role) => (
                   <button
                     key={role}
-                    onClick={() => setSelectedRole(role)}
-                    className={`w-full rounded-lg border px-3 py-2 text-left ${
-                      selectedRole === role ? 'border-slate-900 bg-slate-900 text-white' : 'border-slate-200'
-                    }`}
+                    type="button"
+                    onClick={() => handleDevRoleChoice(role)}
+                    className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-left text-sm hover:bg-slate-50"
                   >
                     {roleLabels[role]}
                   </button>
                 ))}
               </div>
-              <button className="mt-5 w-full rounded-lg bg-teal-700 px-3 py-2 font-medium text-white" onClick={handleRoleLogin}>
-                Weiter
+              <button
+                type="button"
+                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-700"
+                onClick={() => setDevRolePickerOpen(false)}
+              >
+                Zurueck
               </button>
-            </>
+            </div>
           )}
         </div>
       </main>
@@ -582,7 +618,7 @@ function App() {
           </div>
           <div className="flex items-center gap-3">
             <div className="rounded-lg border border-slate-200 px-3 py-2 text-sm">
-              {me.data?.displayName ?? devUser} · <strong>{roleLabels[me.data?.role ?? devRole]}</strong>
+              {me.data?.displayName ?? '…'} · <strong>{roleLabels[me.data?.role ?? devRole]}</strong>
             </div>
             <button
               className="rounded-lg border border-slate-300 px-3 py-2 text-sm"

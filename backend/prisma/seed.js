@@ -3,30 +3,63 @@ const { PrismaClient, UserRole } = require('@prisma/client');
 const prisma = new PrismaClient();
 
 async function main() {
-  const rooms = Array.from({ length: 10 }, (_, idx) => ({
-    name: `Raum ${idx + 1}`,
-    capacity: idx < 2 ? 25 : 12,
-    description:
-      idx < 2
-        ? 'Groesserer Besprechungsraum mit Konferenzausstattung.'
-        : 'Standardraum fuer Teamtermine und Einzelgespraeche.',
-  }));
+  const rooms = [
+    {
+      name: 'Alte Meierei',
+      capacity: 40,
+      description: 'Veranstaltungs- und Gemeinderaum.',
+    },
+    {
+      name: 'Alte Schule',
+      capacity: 30,
+      description: 'Seminar- und Gruppenraum.',
+    },
+    {
+      name: 'Feuerwehrhaus',
+      capacity: 25,
+      description: 'Versammlungsraum im Feuerwehrhaus.',
+    },
+  ];
 
   for (const room of rooms) {
     await prisma.room.upsert({
       where: { name: room.name },
-      update: room,
-      create: room,
+      update: { ...room, isActive: true },
+      create: { ...room, isActive: true },
     });
   }
 
   await prisma.user.upsert({
+    where: { authentikSub: 'dev-user' },
+    update: { role: UserRole.USER, email: 'user@local.dev', displayName: 'Dev Standardnutzer' },
+    create: {
+      authentikSub: 'dev-user',
+      email: 'user@local.dev',
+      displayName: 'Dev Standardnutzer',
+      role: UserRole.USER,
+    },
+  });
+  await prisma.user.upsert({
+    where: { authentikSub: 'dev-extended-user' },
+    update: {
+      role: UserRole.EXTENDED_USER,
+      email: 'extended-user@local.dev',
+      displayName: 'Dev Erweiterter Nutzer',
+    },
+    create: {
+      authentikSub: 'dev-extended-user',
+      email: 'extended-user@local.dev',
+      displayName: 'Dev Erweiterter Nutzer',
+      role: UserRole.EXTENDED_USER,
+    },
+  });
+  await prisma.user.upsert({
     where: { authentikSub: 'dev-admin' },
-    update: { role: UserRole.ADMIN, email: 'admin@local.dev', displayName: 'Admin' },
+    update: { role: UserRole.ADMIN, email: 'admin@local.dev', displayName: 'Dev Administrator' },
     create: {
       authentikSub: 'dev-admin',
       email: 'admin@local.dev',
-      displayName: 'Admin',
+      displayName: 'Dev Administrator',
       role: UserRole.ADMIN,
     },
   });

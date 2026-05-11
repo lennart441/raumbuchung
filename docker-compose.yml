@@ -25,7 +25,7 @@ services:
       PORT: 3000
       FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-http://localhost:8080}
       DATABASE_URL: postgresql://postgres:postgres@db:5432/raumbuchung
-      AUTH_MODE: ${AUTH_MODE:-dev}
+      DEV: ${DEV:-true}
       AUTHENTIK_OIDC_ISSUER: ${AUTHENTIK_OIDC_ISSUER:-https://auth.example.com/application/o/raumbuchung}
       AUTHENTIK_OIDC_CLIENT_ID: ${AUTHENTIK_OIDC_CLIENT_ID:-raumbuchung-frontend}
       AUTHENTIK_OIDC_AUDIENCE: ${AUTHENTIK_OIDC_AUDIENCE:-raumbuchung-frontend}
@@ -52,12 +52,12 @@ services:
       context: ./frontend
       args:
         VITE_API_URL: ${VITE_API_URL:-/api}
-        VITE_AUTH_MODE: ${AUTH_MODE:-oidc}
         VITE_AUTHENTIK_OIDC_ISSUER: ${AUTHENTIK_OIDC_ISSUER:-https://auth.example.com/application/o/raumbuchung}
         VITE_AUTHENTIK_OIDC_CLIENT_ID: ${AUTHENTIK_OIDC_CLIENT_ID:-raumbuchung-frontend}
         VITE_AUTHENTIK_OIDC_APP_ORIGIN: ${AUTHENTIK_OIDC_APP_ORIGIN:-http://localhost:8080}
         VITE_AUTHENTIK_OIDC_POST_LOGOUT_REDIRECT_URI: ${AUTHENTIK_OIDC_POST_LOGOUT_REDIRECT_URI:-http://localhost:8080}
         VITE_AUTHENTIK_OIDC_SCOPE: ${AUTHENTIK_OIDC_SCOPE:-openid profile email phone}
+        VITE_DEV: ${DEV:-true}
     container_name: raumbuchung-frontend
     depends_on:
       - backend
