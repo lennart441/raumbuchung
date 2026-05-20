@@ -82,6 +82,11 @@ function toLocalInputValue(date: Date) {
   return `${year}-${month}-${day}T${hours}:${minutes}`
 }
 
+/** `datetime-local` (Ortszeit) → ISO-UTC für die API (Backend läuft oft in UTC). */
+function localDateTimeInputToIso(value: string) {
+  return new Date(value).toISOString()
+}
+
 function dayStartFromInput(input: string) {
   const base = input ? new Date(input) : new Date()
   base.setHours(DAY_START_HOUR, 0, 0, 0)
@@ -390,7 +395,17 @@ function App() {
   const createBooking = async () => {
     if (!roomId || !startAt || !endAt) return
     if (showRecurrence) return
-    await api.post('/bookings', { roomId, startAt, endAt, title, description }, { headers })
+    await api.post(
+      '/bookings',
+      {
+        roomId,
+        startAt: localDateTimeInputToIso(startAt),
+        endAt: localDateTimeInputToIso(endAt),
+        title,
+        description,
+      },
+      { headers },
+    )
     await refreshAll()
     setTitle('')
     setDescription('')
@@ -405,8 +420,8 @@ function App() {
         '/bookings/series/preview',
         {
           roomId,
-          startAt,
-          endAt,
+          startAt: localDateTimeInputToIso(startAt),
+          endAt: localDateTimeInputToIso(endAt),
           recurrence,
           until: recurrenceUntil,
           title: title || undefined,
@@ -429,8 +444,8 @@ function App() {
         '/bookings/series',
         {
           roomId,
-          startAt,
-          endAt,
+          startAt: localDateTimeInputToIso(startAt),
+          endAt: localDateTimeInputToIso(endAt),
           recurrence,
           until: recurrenceUntil,
           title: title || undefined,
@@ -459,7 +474,17 @@ function App() {
 
   const saveBookingEdits = async () => {
     if (!selectedBooking || !editingBookingId || !roomId || !startAt || !endAt) return
-    await api.patch(`/bookings/${editingBookingId}`, { roomId, startAt, endAt, title, description }, { headers })
+    await api.patch(
+      `/bookings/${editingBookingId}`,
+      {
+        roomId,
+        startAt: localDateTimeInputToIso(startAt),
+        endAt: localDateTimeInputToIso(endAt),
+        title,
+        description,
+      },
+      { headers },
+    )
     await refreshAll()
     setDetailsOpen(false)
     setEditingBookingId(null)
