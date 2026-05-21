@@ -20,19 +20,27 @@ export default defineConfig(({ mode }) => {
   const backendProxy = (merged.VITE_BACKEND_ORIGIN || 'http://127.0.0.1:3000').replace(/\/$/, '')
   const useDevProxy =
     mode === 'development' && apiBase === '/api'
+  const hmrClientPort = merged.VITE_HMR_CLIENT_PORT
+    ? Number(merged.VITE_HMR_CLIENT_PORT)
+    : undefined
 
   return {
     plugins: [react(), tailwindcss()],
     define,
-    server: useDevProxy
-      ? {
-          proxy: {
-            '/api': {
-              target: backendProxy,
-              changeOrigin: true,
+    server: {
+      host: '0.0.0.0',
+      port: 5173,
+      ...(hmrClientPort ? { hmr: { clientPort: hmrClientPort } } : {}),
+      ...(useDevProxy
+        ? {
+            proxy: {
+              '/api': {
+                target: backendProxy,
+                changeOrigin: true,
+              },
             },
-          },
-        }
-      : {},
+          }
+        : {}),
+    },
   }
 })

@@ -27,6 +27,11 @@ pids/
 .env.*
 !.env.example
 
+# Lokaler Docker-Dev-Stack (nginx + compose, nicht ins Repo)
+docker-compose-dev.yml
+nginx-dev.conf
+.env.dev
+
 # Local config
 *.local
 

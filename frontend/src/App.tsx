@@ -72,6 +72,10 @@ const roleLabels: Record<Me['role'], string> = {
 const DAY_START_HOUR = 0
 const DAY_END_HOUR = 24
 const TIMELINE_MINUTES = (DAY_END_HOUR - DAY_START_HOUR) * 60
+const MOBILE_SLOT_HOURS = 2
+const MOBILE_SLOT_MINUTES = MOBILE_SLOT_HOURS * 60
+const MOBILE_SLOT_COUNT = TIMELINE_MINUTES / MOBILE_SLOT_MINUTES
+const MOBILE_ROW_HEIGHT_PX = 52
 
 function toLocalInputValue(date: Date) {
   const year = date.getFullYear()
@@ -129,6 +133,25 @@ function displayBookingTitle(booking: Booking | CalendarBooking) {
 
 function intervalsOverlap(aFrom: Date, aTo: Date, bFrom: Date, bTo: Date) {
   return aFrom < bTo && aTo > bFrom
+}
+
+function bookingMinutesOnDay(booking: { startAt: string; endAt: string }, dayStart: Date) {
+  const startMinutes = (new Date(booking.startAt).getTime() - dayStart.getTime()) / 60000
+  const endMinutes = (new Date(booking.endAt).getTime() - dayStart.getTime()) / 60000
+  return {
+    start: Math.max(0, Math.min(startMinutes, TIMELINE_MINUTES)),
+    end: Math.max(0, Math.min(endMinutes, TIMELINE_MINUTES)),
+  }
+}
+
+function bookingOverlapsMinuteRange(
+  booking: { startAt: string; endAt: string },
+  dayStart: Date,
+  rangeStart: number,
+  rangeEnd: number,
+) {
+  const { start, end } = bookingMinutesOnDay(booking, dayStart)
+  return start < rangeEnd && end > rangeStart
 }
 
 function roomAvailableForTimeFilter(
@@ -546,6 +569,31 @@ function App() {
     setModalOpen(true)
   }
 
+  const openModalForMobileSlot = (room: Room, slotIndex: number) => {
+    const startMinutes = slotIndex * MOBILE_SLOT_MINUTES
+    const dayStart = dayStartFromInput(selectedDay)
+    const start = minutesToDate(dayStart, startMinutes)
+    const end = minutesToDate(dayStart, startMinutes + MOBILE_SLOT_MINUTES)
+    setRoomId(room.id)
+    setStartAt(toLocalInputValue(start))
+    setEndAt(toLocalInputValue(end))
+    setTitle('')
+    setDescription('')
+    setSeriesPreview(null)
+    setSeriesSkippedStarts([])
+    setShowRecurrence(false)
+    setModalOpen(true)
+  }
+
+  const applyMobileDuration = (hours: number) => {
+    if (!startAt) return
+    const start = new Date(startAt)
+    if (Number.isNaN(start.getTime())) return
+    const end = new Date(start)
+    end.setHours(end.getHours() + hours)
+    setEndAt(toLocalInputValue(end))
+  }
+
   const openDetails = (booking: Booking, room: Room) => {
     setSelectedBookingId(booking.id)
     setRoomId(rooms.data?.find((r) => r.name === room.name)?.id ?? '')
@@ -656,9 +704,9 @@ function App() {
         </div>
       </header>
 
-      <section className="mb-4 rounded-2xl bg-white p-4 shadow-sm ring-1 ring-slate-200/70">
-        <h2 className="text-lg font-semibold">Mein Profil (readonly)</h2>
-        <div className="mt-2 grid gap-2 text-sm sm:grid-cols-2 lg:grid-cols-3">
+      <details className="mb-4 rounded-2xl bg-white p-4 shadow-sm ring-1 ring-slate-200/70">
+        <summary className="cursor-pointer select-none text-lg font-semibold">Mein Profil (readonly)</summary>
+        <div className="mt-4 grid gap-2 text-sm sm:grid-cols-2 lg:grid-cols-3">
           <div>
             <strong>Name:</strong> {me.data?.displayName ?? '-'}
           </div>
@@ -681,7 +729,7 @@ function App() {
             <strong>Geburtsdatum:</strong> {formatBirthDate(me.data?.birthDate)}
           </div>
         </div>
-      </section>
+      </details>
 
       <div className="grid gap-4 2xl:grid-cols-[280px_1fr_360px]">
         {/* Mobile/Tablet: Filter als Akkordeon */}
@@ -783,9 +831,127 @@ function App() {
             </div>
           </div>
 
-          <div className="max-w-full overflow-x-auto touch-pan-x">
+          {/* Mobile: vertikale Zeitleiste, Räume als Spalten, Tippen statt Ziehen */}
+          <div className="md:hidden">
+            <div
+              className="mb-2 grid gap-1"
+              style={{ gridTemplateColumns: `2.75rem repeat(${Math.max(roomCalendar.length, 1)}, minmax(0, 1fr))` }}
+            >
+              <div />
+              {roomCalendar.map(({ room }) => (
+                <div key={room.id} className="rounded-lg border border-slate-200 px-1.5 py-1.5 text-center text-[10px] font-semibold leading-tight">
+                  <div className="flex items-center justify-center gap-0.5">
+                    <span className="line-clamp-2">{room.name}</span>
+                    {room.description && (
+                      <span
+                        className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-slate-200 text-[9px] font-semibold text-slate-700"
+                        title={room.description}
+                      >
+                        i
+                      </span>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="max-h-[min(70vh,640px)] overflow-y-auto overscroll-contain rounded-xl border border-slate-200">
+              <div
+                className="grid gap-0"
+                style={{ gridTemplateColumns: `2.75rem repeat(${Math.max(roomCalendar.length, 1)}, minmax(0, 1fr))` }}
+              >
+                <div className="bg-slate-50/80">
+                  {Array.from({ length: MOBILE_SLOT_COUNT }).map((_, slotIdx) => (
+                    <div
+                      key={slotIdx}
+                      className="flex items-start border-b border-slate-200/80 px-1 pt-1 text-[10px] text-slate-500"
+                      style={{ height: MOBILE_ROW_HEIGHT_PX }}
+                    >
+                      {String(DAY_START_HOUR + slotIdx * MOBILE_SLOT_HOURS).padStart(2, '0')}:00
+                    </div>
+                  ))}
+                </div>
+
+                {roomCalendar.map(({ room, bookings: roomBookings }) => {
+                  const dayStart = dayStartFromInput(selectedDay)
+                  const trackHeight = MOBILE_SLOT_COUNT * MOBILE_ROW_HEIGHT_PX
+                  return (
+                    <div
+                      key={room.id}
+                      className="relative border-l border-slate-200 bg-slate-50"
+                      style={{ height: trackHeight }}
+                    >
+                      {Array.from({ length: MOBILE_SLOT_COUNT }).map((_, slotIdx) => {
+                        const rangeStart = slotIdx * MOBILE_SLOT_MINUTES
+                        const rangeEnd = rangeStart + MOBILE_SLOT_MINUTES
+                        const occupied = roomBookings.some((booking) =>
+                          bookingOverlapsMinuteRange(booking, dayStart, rangeStart, rangeEnd),
+                        )
+                        if (occupied) return null
+                        return (
+                          <button
+                            key={slotIdx}
+                            type="button"
+                            className="absolute inset-x-0 z-0 border-b border-slate-200/70 active:bg-teal-100/60"
+                            style={{
+                              top: `${(rangeStart / TIMELINE_MINUTES) * 100}%`,
+                              height: `${(MOBILE_SLOT_MINUTES / TIMELINE_MINUTES) * 100}%`,
+                            }}
+                            onClick={() => openModalForMobileSlot(room, slotIdx)}
+                            title={`${room.name}: ${String(DAY_START_HOUR + slotIdx * MOBILE_SLOT_HOURS).padStart(2, '0')}:00 buchen`}
+                            aria-label={`Freier Slot ${room.name} ab ${String(DAY_START_HOUR + slotIdx * MOBILE_SLOT_HOURS).padStart(2, '0')}:00`}
+                          />
+                        )
+                      })}
+                      {roomBookings.map((booking) => {
+                        const { start, end } = bookingMinutesOnDay(booking, dayStart)
+                        const top = `${(start / TIMELINE_MINUTES) * 100}%`
+                        const height = `${Math.max(2, ((end - start) / TIMELINE_MINUTES) * 100)}%`
+                        const canSeePerson = isAdmin || !booking.isMasked
+                        const isClickable = !booking.isMasked
+                        return (
+                          <div
+                            key={booking.id}
+                            className={`absolute inset-x-0.5 z-10 overflow-hidden rounded-md px-1 py-0.5 text-[9px] leading-tight shadow-sm ${bookingClass(booking.status)} ${
+                              isClickable ? '' : 'pointer-events-none'
+                            }`}
+                            style={{ top, height }}
+                            title={
+                              booking.isMasked
+                                ? 'Blockiert'
+                                : `Details: ${displayBookingTitle(booking)}${
+                                    canSeePerson && booking.user?.displayName ? ` (${booking.user.displayName})` : ''
+                                  }`
+                            }
+                          >
+                            {isClickable ? (
+                              <button
+                                type="button"
+                                className="h-full w-full text-left"
+                                onClick={() => openDetails(booking, room)}
+                              >
+                                <span className="block truncate font-medium">{displayBookingTitle(booking)}</span>
+                                {canSeePerson && booking.user?.displayName && (
+                                  <span className="block truncate opacity-90">{booking.user.displayName}</span>
+                                )}
+                              </button>
+                            ) : (
+                              <span className="block truncate font-medium">Blockiert</span>
+                            )}
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+            <p className="mt-2 text-xs text-slate-500">Tippen Sie auf einen freien Zeitslot, um eine Buchung zu starten.</p>
+          </div>
+
+          {/* Desktop: horizontale Timeline mit Drag-Auswahl */}
+          <div className="hidden max-w-full overflow-x-auto touch-pan-x md:block">
             <div className="min-w-[760px]">
-              {/* Kopfzeile (Raum-Spalte sticky, Zeitachse scrollt) */}
               <div className="mb-2 grid grid-cols-[132px_1fr] sm:grid-cols-[156px_1fr]">
                 <div className="sticky left-0 z-20 bg-white pr-2">
                   <div className="h-5" />
@@ -854,10 +1020,7 @@ function App() {
                       </div>
                       {roomBookings.map((booking) => {
                         const dayStart = dayStartFromInput(selectedDay)
-                        const startMinutes = (new Date(booking.startAt).getTime() - dayStart.getTime()) / 60000
-                        const endMinutes = (new Date(booking.endAt).getTime() - dayStart.getTime()) / 60000
-                        const clampedStart = Math.max(0, Math.min(startMinutes, TIMELINE_MINUTES))
-                        const clampedEnd = Math.max(0, Math.min(endMinutes, TIMELINE_MINUTES))
+                        const { start: clampedStart, end: clampedEnd } = bookingMinutesOnDay(booking, dayStart)
                         const left = `${(clampedStart / TIMELINE_MINUTES) * 100}%`
                         const width = `${Math.max(4, ((clampedEnd - clampedStart) / TIMELINE_MINUTES) * 100)}%`
                         const canSeePerson = isAdmin || !booking.isMasked
@@ -1081,6 +1244,21 @@ function App() {
               <label className="text-sm">
                 <span className="mb-1 block text-slate-700">Ende (erster Termin)</span>
                 <input className="w-full rounded border p-2" type="datetime-local" value={endAt} onChange={(e) => setEndAt(e.target.value)} />
+              </label>
+              <label className="text-sm md:hidden">
+                <span className="mb-1 block text-slate-700">Dauer (Schnellauswahl)</span>
+                <select
+                  className="w-full rounded border p-2"
+                  defaultValue={MOBILE_SLOT_HOURS}
+                  onChange={(e) => applyMobileDuration(Number(e.target.value))}
+                >
+                  <option value="1">1 Stunde</option>
+                  <option value="2">2 Stunden</option>
+                  <option value="3">3 Stunden</option>
+                  <option value="4">4 Stunden</option>
+                  <option value="6">6 Stunden</option>
+                  <option value="8">8 Stunden</option>
+                </select>
               </label>
               <label className="text-sm md:col-span-2">
                 <span className="mb-1 block text-slate-700">Titel</span>
