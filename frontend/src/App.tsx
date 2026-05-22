@@ -74,7 +74,7 @@ type SeriesOccurrencePreview = {
   reason?: string
 }
 
-type Workspace = 'calendar' | 'bookings' | 'approvals'
+type Workspace = 'calendar' | 'bookings' | 'approvals' | 'overview'
 
 type SeriesGroup = {
   seriesId: string
@@ -200,6 +200,8 @@ function bookingClass(status: string) {
   const normalized = status.toUpperCase()
   if (normalized === 'CONFIRMED' || normalized === 'APPROVED') return 'bg-blue-500/90 text-white'
   if (normalized === 'PENDING') return 'bg-amber-400/90 text-slate-900'
+  if (normalized === 'REJECTED') return 'bg-rose-500/90 text-white'
+  if (normalized === 'CANCELLED') return 'bg-slate-200 text-slate-600'
   if (normalized === 'BLOCKED' || normalized === 'MAINTENANCE') return 'bg-slate-300 text-slate-700'
   return 'bg-slate-300 text-slate-700'
 }
@@ -210,6 +212,7 @@ function bookingStatusLabel(status: string) {
   if (normalized === 'PENDING') return 'Ausstehend'
   if (normalized === 'BLOCKED' || normalized === 'MAINTENANCE') return 'Blockiert'
   if (normalized === 'REJECTED') return 'Abgelehnt'
+  if (normalized === 'CANCELLED') return 'Storniert'
   return status
 }
 
@@ -489,6 +492,13 @@ function App() {
     () => groupBookingsBySeries(bookings.data ?? []),
     [bookings.data],
   )
+
+  const overviewBookings = useMemo(() => {
+    const now = Date.now()
+    return (adminBookings.data ?? [])
+      .filter((b) => new Date(b.endAt).getTime() > now)
+      .sort((a, b) => new Date(a.startAt).getTime() - new Date(b.startAt).getTime())
+  }, [adminBookings.data])
 
   const pendingBookings = (adminBookings.data ?? []).filter((booking) => booking.status.toUpperCase() === 'PENDING')
   const pendingGroups = useMemo(() => groupBookingsBySeries(pendingBookings), [pendingBookings])
@@ -1044,13 +1054,22 @@ function App() {
             Meine Buchungen
           </button>
           {isAdmin && (
-            <button
-              type="button"
-              className={`rounded-lg px-3 py-2 text-sm font-medium ${workspace === 'approvals' ? 'bg-teal-700 text-white' : 'border border-slate-300 text-slate-700'}`}
-              onClick={() => setWorkspace('approvals')}
-            >
-              Freigaben ({pendingSeriesCount + pendingSingleCount})
-            </button>
+            <>
+              <button
+                type="button"
+                className={`rounded-lg px-3 py-2 text-sm font-medium ${workspace === 'overview' ? 'bg-teal-700 text-white' : 'border border-slate-300 text-slate-700'}`}
+                onClick={() => setWorkspace('overview')}
+              >
+                Terminübersicht
+              </button>
+              <button
+                type="button"
+                className={`rounded-lg px-3 py-2 text-sm font-medium ${workspace === 'approvals' ? 'bg-teal-700 text-white' : 'border border-slate-300 text-slate-700'}`}
+                onClick={() => setWorkspace('approvals')}
+              >
+                Freigaben ({pendingSeriesCount + pendingSingleCount})
+              </button>
+            </>
           )}
         </nav>
       </header>
@@ -1338,6 +1357,69 @@ function App() {
                   </div>
                 </article>
               ))}
+            </div>
+          )}
+        </section>
+      )}
+
+      {workspace === 'overview' && isAdmin && (
+        <section className="rounded-2xl bg-white p-4 shadow-sm ring-1 ring-slate-200/70 sm:p-6">
+          <h2 className="mb-4 text-lg font-semibold">Terminübersicht</h2>
+          <p className="mb-4 text-sm text-slate-600">
+            Alle zukünftigen und laufenden Buchungen über alle Räume. Klicken Sie auf einen Termin für Details,
+            Bearbeitung und Freigabe.
+          </p>
+          {adminBookings.isLoading ? (
+            <p className="text-sm text-slate-500">Lade Termine…</p>
+          ) : adminBookings.isError ? (
+            <p className="text-sm text-rose-600">Termine konnten nicht geladen werden.</p>
+          ) : overviewBookings.length === 0 ? (
+            <p className="text-sm text-slate-500">Keine anstehenden Termine.</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[720px] border-collapse text-sm">
+                <thead>
+                  <tr className="border-b border-slate-200 bg-slate-50 text-left">
+                    <th className="p-3 font-semibold">Bezeichnung</th>
+                    <th className="p-3 font-semibold">Raum</th>
+                    <th className="p-3 font-semibold">Start</th>
+                    <th className="p-3 font-semibold">Ende</th>
+                    <th className="p-3 font-semibold">Bucher</th>
+                    <th className="p-3 font-semibold">Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {overviewBookings.map((booking) => (
+                    <tr
+                      key={booking.id}
+                      className="cursor-pointer border-b border-slate-100 transition-colors hover:bg-slate-50"
+                      onClick={() => openSingleDetails(booking)}
+                    >
+                      <td className="p-3 font-medium">
+                        {booking.seriesId ? (
+                          <span className="mr-1 font-semibold text-slate-600">Serie ·</span>
+                        ) : null}
+                        {displayBookingTitle(booking)}
+                      </td>
+                      <td className="p-3 text-slate-700">{booking.room?.name ?? '—'}</td>
+                      <td className="p-3 text-slate-700">
+                        {new Date(booking.startAt).toLocaleString('de-DE')}
+                      </td>
+                      <td className="p-3 text-slate-700">
+                        {new Date(booking.endAt).toLocaleString('de-DE')}
+                      </td>
+                      <td className="p-3 text-slate-700">{booking.user?.displayName ?? '—'}</td>
+                      <td className="p-3">
+                        <span
+                          className={`inline-block rounded-full px-2 py-0.5 text-xs ${bookingClass(booking.status)}`}
+                        >
+                          {bookingStatusLabel(booking.status)}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           )}
         </section>
@@ -1734,7 +1816,7 @@ function App() {
             {isExtended ? 'Direkt buchen' : 'Buchung anfragen'}
           </button>
           <p className="text-xs text-slate-500">
-            Buchungen und Freigaben finden Sie in den Reitern oben.
+            Buchungen, Terminübersicht und Freigaben finden Sie in den Reitern oben.
           </p>
         </aside>
       </div>
