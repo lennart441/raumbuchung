@@ -27,6 +27,12 @@ enum DecisionType {
   BLOCK
 }
 
+enum SeriesRecurrence {
+  DAILY
+  WEEKLY
+  MONTHLY
+}
+
 model User {
   id              String          @id @default(cuid())
   authentikSub    String          @unique
@@ -43,6 +49,7 @@ model User {
   createdAt       DateTime        @default(now())
   updatedAt       DateTime        @updatedAt
   bookings        Booking[]
+  bookingSeries   BookingSeries[]
   createdBlocks   RoomBlock[]
   decisions       BookingDecision[]
   roomBans        UserRoomBan[]
@@ -58,6 +65,7 @@ model Room {
   createdAt DateTime   @default(now())
   updatedAt DateTime   @updatedAt
   bookings  Booking[]
+  series    BookingSeries[]
   blocks    RoomBlock[]
   roomBans  UserRoomBan[]
 }
@@ -74,12 +82,29 @@ model RoomBlock {
   createdAt   DateTime @default(now())
 }
 
+model BookingSeries {
+  id          String           @id @default(cuid())
+  roomId      String
+  room        Room             @relation(fields: [roomId], references: [id], onDelete: Restrict)
+  userId      String
+  user        User             @relation(fields: [userId], references: [id], onDelete: Restrict)
+  recurrence  SeriesRecurrence
+  untilDate   DateTime
+  title       String?
+  description String?
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+  bookings    Booking[]
+}
+
 model Booking {
   id           String           @id @default(cuid())
   roomId        String
   room          Room             @relation(fields: [roomId], references: [id], onDelete: Restrict)
   userId        String
   user          User             @relation(fields: [userId], references: [id], onDelete: Restrict)
+  seriesId      String?
+  series        BookingSeries?   @relation(fields: [seriesId], references: [id], onDelete: SetNull)
   startAt       DateTime
   endAt         DateTime
   title         String?

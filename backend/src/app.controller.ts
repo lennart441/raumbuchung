@@ -69,6 +69,28 @@ class UpdateBookingDto {
   description?: string;
 }
 
+class UpdateSeriesDto {
+  @IsOptional()
+  @IsString()
+  roomId?: string;
+
+  @IsOptional()
+  @IsString()
+  title?: string;
+
+  @IsOptional()
+  @IsString()
+  description?: string;
+
+  @IsOptional()
+  @IsDateString()
+  startAt?: string;
+
+  @IsOptional()
+  @IsDateString()
+  endAt?: string;
+}
+
 class SeriesBookingDto {
   @IsString()
   roomId!: string;
@@ -247,6 +269,40 @@ export class AppController {
     return this.appService.deleteBooking(req.user, id);
   }
 
+  @UseGuards(AuthGuard)
+  @Get('bookings/series/:seriesId')
+  async getBookingSeries(
+    @Req() req: RequestWithUser,
+    @Param('seriesId') seriesId: string,
+  ) {
+    return this.appService.getBookingSeries(req.user, seriesId);
+  }
+
+  @UseGuards(AuthGuard)
+  @Patch('bookings/series/:seriesId')
+  async updateBookingSeries(
+    @Req() req: RequestWithUser,
+    @Param('seriesId') seriesId: string,
+    @Body() body: UpdateSeriesDto,
+  ) {
+    return this.appService.updateBookingSeries(req.user, seriesId, {
+      roomId: body.roomId,
+      title: body.title,
+      description: body.description,
+      startAt: body.startAt ? new Date(body.startAt) : undefined,
+      endAt: body.endAt ? new Date(body.endAt) : undefined,
+    });
+  }
+
+  @UseGuards(AuthGuard)
+  @Delete('bookings/series/:seriesId')
+  async deleteBookingSeries(
+    @Req() req: RequestWithUser,
+    @Param('seriesId') seriesId: string,
+  ) {
+    return this.appService.deleteBookingSeries(req.user, seriesId);
+  }
+
   @UseGuards(AuthGuard, RolesGuard)
   @Roles(UserRole.ADMIN)
   @Get('admin/bookings')
@@ -285,6 +341,57 @@ export class AppController {
     @Body() body: DecisionDto,
   ) {
     return this.appService.blockBooking(req.user, id, body.reason);
+  }
+
+  @UseGuards(AuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN)
+  @Patch('admin/bookings/series/:seriesId/approve')
+  async approveSeries(
+    @Req() req: RequestWithUser,
+    @Param('seriesId') seriesId: string,
+    @Body() body: DecisionDto,
+  ) {
+    return this.appService.approveBookingSeries(
+      req.user,
+      seriesId,
+      body.reason,
+    );
+  }
+
+  @UseGuards(AuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN)
+  @Patch('admin/bookings/series/:seriesId/reject')
+  async rejectSeries(
+    @Req() req: RequestWithUser,
+    @Param('seriesId') seriesId: string,
+    @Body() body: DecisionDto,
+  ) {
+    return this.appService.rejectBookingSeries(
+      req.user,
+      seriesId,
+      body.reason,
+    );
+  }
+
+  @UseGuards(AuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN)
+  @Patch('admin/bookings/series/:seriesId/block')
+  async blockSeries(
+    @Req() req: RequestWithUser,
+    @Param('seriesId') seriesId: string,
+    @Body() body: DecisionDto,
+  ) {
+    return this.appService.blockBookingSeries(req.user, seriesId, body.reason);
+  }
+
+  @UseGuards(AuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN)
+  @Delete('admin/bookings/series/:seriesId')
+  async adminDeleteSeries(
+    @Req() req: RequestWithUser,
+    @Param('seriesId') seriesId: string,
+  ) {
+    return this.appService.deleteBookingSeries(req.user, seriesId);
   }
 
   @UseGuards(AuthGuard, RolesGuard)

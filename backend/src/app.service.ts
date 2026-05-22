@@ -4,13 +4,19 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { BookingStatus, DecisionType, Prisma, UserRole } from '@prisma/client';
+import {
+  BookingStatus,
+  DecisionType,
+  Prisma,
+  SeriesRecurrence,
+  UserRole,
+} from '@prisma/client';
 import { PrismaService } from './prisma.service';
 import { AuthUser } from './auth/request-user';
 import { resolveRoleFromClaims } from './auth/role-resolution';
 import { MailService } from './mail.service';
 
-export type SeriesRecurrence = 'DAILY' | 'WEEKLY' | 'MONTHLY';
+export type SeriesRecurrenceInput = 'DAILY' | 'WEEKLY' | 'MONTHLY';
 
 type CreateBookingInput = {
   roomId: string;
@@ -32,11 +38,19 @@ type SeriesBookingInput = {
   roomId: string;
   startAt: Date;
   endAt: Date;
-  recurrence: SeriesRecurrence;
+  recurrence: SeriesRecurrenceInput;
   until: string;
   title?: string;
   description?: string;
   skipStartAts?: string[];
+};
+
+type UpdateSeriesInput = {
+  roomId?: string;
+  title?: string;
+  description?: string;
+  startAt?: Date;
+  endAt?: Date;
 };
 
 type BookingTx = Pick<PrismaService, 'roomBlock' | 'booking'>;
@@ -51,7 +65,7 @@ function localDateKey(d: Date): string {
 function advanceOccurrence(
   start: Date,
   end: Date,
-  recurrence: SeriesRecurrence,
+  recurrence: SeriesRecurrenceInput,
 ): { startAt: Date; endAt: Date } {
   const duration = end.getTime() - start.getTime();
   const ns = new Date(start);
@@ -72,7 +86,7 @@ function advanceOccurrence(
 function expandSeriesOccurrences(
   firstStart: Date,
   firstEnd: Date,
-  recurrence: SeriesRecurrence,
+  recurrence: SeriesRecurrenceInput,
   untilDateStr: string,
 ): Array<{ startAt: Date; endAt: Date }> {
   const untilKey = untilDateStr.trim().slice(0, 10);
@@ -321,34 +335,59 @@ export class AppService {
       reason?: string;
     }> = [];
 
-    const created = await this.prisma.$transaction(async (tx) => {
+    const untilDate = new Date(`${input.until.trim().slice(0, 10)}T12:00:00`);
+
+    const slotsToCreate: Array<{ startAt: Date; endAt: Date }> = [];
+    for (const slot of slots) {
+      const t = slot.startAt.getTime();
+      if (skipMs.has(t)) {
+        skippedExplicit.push({
+          startAt: slot.startAt.toISOString(),
+          endAt: slot.endAt.toISOString(),
+        });
+        continue;
+      }
+      const { conflict, reason } = await this.checkSlotConflict(
+        input.roomId,
+        slot.startAt,
+        slot.endAt,
+      );
+      if (conflict) {
+        skippedConflict.push({
+          startAt: slot.startAt.toISOString(),
+          endAt: slot.endAt.toISOString(),
+          reason,
+        });
+        continue;
+      }
+      slotsToCreate.push(slot);
+    }
+
+    if (slotsToCreate.length === 0) {
+      return {
+        seriesId: null,
+        created: [],
+        skippedExplicit,
+        skippedConflict,
+      };
+    }
+
+    const { seriesId, created } = await this.prisma.$transaction(async (tx) => {
+      const series = await tx.bookingSeries.create({
+        data: {
+          roomId: input.roomId,
+          userId: user.id,
+          recurrence: input.recurrence as SeriesRecurrence,
+          untilDate,
+          title: input.title,
+          description: input.description,
+        },
+      });
+
       const out: Prisma.BookingGetPayload<{
         include: { room: true; user: true };
       }>[] = [];
-      for (const slot of slots) {
-        const t = slot.startAt.getTime();
-        if (skipMs.has(t)) {
-          skippedExplicit.push({
-            startAt: slot.startAt.toISOString(),
-            endAt: slot.endAt.toISOString(),
-          });
-          continue;
-        }
-        const { conflict, reason } = await this.checkSlotConflict(
-          input.roomId,
-          slot.startAt,
-          slot.endAt,
-          tx as BookingTx,
-        );
-        if (conflict) {
-          skippedConflict.push({
-            startAt: slot.startAt.toISOString(),
-            endAt: slot.endAt.toISOString(),
-            reason,
-          });
-          continue;
-        }
-
+      for (const slot of slotsToCreate) {
         const isOverbooked = false;
         const status =
           user.role === UserRole.EXTENDED_USER && !isOverbooked
@@ -359,6 +398,7 @@ export class AppService {
           data: {
             roomId: input.roomId,
             userId: user.id,
+            seriesId: series.id,
             startAt: slot.startAt,
             endAt: slot.endAt,
             title: input.title,
@@ -370,23 +410,171 @@ export class AppService {
         });
         out.push(booking);
       }
-      return out;
+      return { seriesId: series.id, created: out };
     });
 
-    for (const booking of created) {
-      this.mailService.sendBookingCreatedMail(booking);
-    }
+    const series = await this.loadSeriesForMail(seriesId);
+    this.mailService.sendSeriesCreatedMails(series);
 
-    return { created, skippedExplicit, skippedConflict };
+    return { seriesId, created, skippedExplicit, skippedConflict };
   }
 
   async myBookings(identity: AuthUser) {
     const user = await this.ensureUser(identity);
     return this.prisma.booking.findMany({
       where: { userId: user.id },
-      include: { room: true, decisions: true },
+      include: {
+        room: true,
+        decisions: true,
+        series: { include: { room: true } },
+      },
       orderBy: { startAt: 'desc' },
     });
+  }
+
+  async getBookingSeries(identity: AuthUser, seriesId: string) {
+    const actor = await this.ensureUser(identity);
+    const series = await this.prisma.bookingSeries.findUnique({
+      where: { id: seriesId },
+      include: {
+        room: true,
+        user: true,
+        bookings: { include: { room: true, decisions: true }, orderBy: { startAt: 'asc' } },
+      },
+    });
+    if (!series) throw new NotFoundException('Serie nicht gefunden');
+    this.assertSeriesAccess(actor, series);
+    return series;
+  }
+
+  async updateBookingSeries(
+    identity: AuthUser,
+    seriesId: string,
+    input: UpdateSeriesInput,
+  ) {
+    const actor = await this.ensureUser(identity);
+    const series = await this.prisma.bookingSeries.findUnique({
+      where: { id: seriesId },
+      include: { bookings: true, user: true },
+    });
+    if (!series) throw new NotFoundException('Serie nicht gefunden');
+    this.assertSeriesAccess(actor, series);
+
+    const roomId = input.roomId ?? series.roomId;
+    if (input.roomId) {
+      await this.assertUserCanBook(series.userId, roomId);
+      const room = await this.prisma.room.findUnique({ where: { id: roomId } });
+      if (!room || !room.isActive) {
+        throw new NotFoundException('Raum nicht gefunden');
+      }
+    }
+
+    const shiftTimes = input.startAt !== undefined && input.endAt !== undefined;
+    if (shiftTimes) {
+      this.assertValidRange(input.startAt!, input.endAt!);
+    } else if (input.startAt !== undefined || input.endAt !== undefined) {
+      throw new BadRequestException(
+        'Fuer Serienaenderungen muessen startAt und endAt gemeinsam gesetzt werden',
+      );
+    }
+
+    const sortedBookings = [...series.bookings].sort(
+      (a, b) => a.startAt.getTime() - b.startAt.getTime(),
+    );
+    const firstBooking = sortedBookings[0];
+    if (!firstBooking) {
+      throw new BadRequestException('Serie hat keine Termine');
+    }
+    const seriesBookingIds = sortedBookings.map((b) => b.id);
+
+    let deltaMs = 0;
+    let newDurationMs =
+      firstBooking.endAt.getTime() - firstBooking.startAt.getTime();
+    if (shiftTimes) {
+      deltaMs = input.startAt!.getTime() - firstBooking.startAt.getTime();
+      newDurationMs = input.endAt!.getTime() - input.startAt!.getTime();
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.bookingSeries.update({
+        where: { id: seriesId },
+        data: {
+          ...(input.roomId ? { roomId } : {}),
+          ...(input.title !== undefined ? { title: input.title } : {}),
+          ...(input.description !== undefined
+            ? { description: input.description }
+            : {}),
+        },
+      });
+
+      if (shiftTimes) {
+        for (const booking of sortedBookings) {
+          const newStartAt = new Date(booking.startAt.getTime() + deltaMs);
+          const newEndAt = new Date(newStartAt.getTime() + newDurationMs);
+          const { conflict } = await this.checkSlotConflict(
+            roomId,
+            newStartAt,
+            newEndAt,
+            tx,
+            seriesBookingIds,
+          );
+          const isOverbooked = conflict;
+          const status =
+            series.user.role === UserRole.EXTENDED_USER && !isOverbooked
+              ? BookingStatus.APPROVED
+              : BookingStatus.PENDING;
+
+          await tx.booking.update({
+            where: { id: booking.id },
+            data: {
+              roomId,
+              startAt: newStartAt,
+              endAt: newEndAt,
+              ...(input.title !== undefined ? { title: input.title } : {}),
+              ...(input.description !== undefined
+                ? { description: input.description }
+                : {}),
+              isOverbooked,
+              status,
+            },
+          });
+        }
+      } else {
+        await tx.booking.updateMany({
+          where: { seriesId },
+          data: {
+            ...(input.roomId ? { roomId } : {}),
+            ...(input.title !== undefined ? { title: input.title } : {}),
+            ...(input.description !== undefined
+              ? { description: input.description }
+              : {}),
+          },
+        });
+      }
+    });
+
+    const updated = await this.loadSeriesForMail(seriesId);
+    if (actor.role === UserRole.ADMIN) {
+      this.mailService.sendSeriesUpdatedByAdminMail(updated);
+    }
+    return updated;
+  }
+
+  async deleteBookingSeries(identity: AuthUser, seriesId: string) {
+    const actor = await this.ensureUser(identity);
+    const series = await this.loadSeriesForMail(seriesId);
+    this.assertSeriesAccess(actor, series);
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.booking.deleteMany({ where: { seriesId } });
+      await tx.bookingSeries.delete({ where: { id: seriesId } });
+    });
+
+    if (actor.role === UserRole.ADMIN) {
+      this.mailService.sendSeriesDeletedByAdminMail(series);
+    }
+
+    return { ok: true };
   }
 
   async updateBooking(
@@ -442,6 +630,8 @@ export class AppService {
         ? BookingStatus.APPROVED
         : BookingStatus.PENDING;
 
+    const detachedSeriesId = existing.seriesId;
+
     const updated = await this.prisma.booking.update({
       where: { id: bookingId },
       data: {
@@ -452,11 +642,23 @@ export class AppService {
         ...(input.description !== undefined
           ? { description: input.description }
           : {}),
+        ...(detachedSeriesId ? { seriesId: null } : {}),
         isOverbooked,
         status,
       },
       include: { room: true, user: true },
     });
+
+    if (detachedSeriesId) {
+      const remaining = await this.prisma.booking.count({
+        where: { seriesId: detachedSeriesId },
+      });
+      if (remaining === 0) {
+        await this.prisma.bookingSeries.delete({
+          where: { id: detachedSeriesId },
+        });
+      }
+    }
 
     if (actor.role === UserRole.ADMIN) {
       this.mailService.sendBookingUpdatedByAdminMail(updated);
@@ -479,6 +681,17 @@ export class AppService {
 
     await this.prisma.booking.delete({ where: { id: bookingId } });
 
+    if (existing.seriesId) {
+      const remaining = await this.prisma.booking.count({
+        where: { seriesId: existing.seriesId },
+      });
+      if (remaining === 0) {
+        await this.prisma.bookingSeries.delete({
+          where: { id: existing.seriesId },
+        });
+      }
+    }
+
     if (actor.role === UserRole.ADMIN) {
       this.mailService.sendBookingDeletedByAdminMail(existing);
     }
@@ -491,6 +704,7 @@ export class AppService {
       where: status ? { status } : undefined,
       include: {
         room: true,
+        series: { include: { room: true } },
         decisions: true,
         user: {
           select: {
@@ -556,6 +770,61 @@ export class AppService {
     return updated;
   }
 
+  async approveBookingSeries(
+    identity: AuthUser,
+    seriesId: string,
+    reason?: string,
+  ) {
+    const admin = await this.ensureUser(identity);
+    await this.applySeriesAdminDecision(
+      admin.id,
+      seriesId,
+      DecisionType.APPROVE,
+      reason,
+    );
+    const series = await this.loadSeriesForMail(seriesId);
+    this.mailService.sendSeriesApprovedMail(series, reason);
+    return series;
+  }
+
+  async rejectBookingSeries(
+    identity: AuthUser,
+    seriesId: string,
+    reason?: string,
+  ) {
+    const admin = await this.ensureUser(identity);
+    await this.applySeriesAdminDecision(
+      admin.id,
+      seriesId,
+      DecisionType.REJECT,
+      reason,
+    );
+    const series = await this.loadSeriesForMail(seriesId);
+    this.mailService.sendSeriesRejectedMail(
+      series,
+      DecisionType.REJECT,
+      reason,
+    );
+    return series;
+  }
+
+  async blockBookingSeries(
+    identity: AuthUser,
+    seriesId: string,
+    reason?: string,
+  ) {
+    const admin = await this.ensureUser(identity);
+    await this.applySeriesAdminDecision(
+      admin.id,
+      seriesId,
+      DecisionType.BLOCK,
+      reason,
+    );
+    const series = await this.loadSeriesForMail(seriesId);
+    this.mailService.sendSeriesRejectedMail(series, DecisionType.BLOCK, reason);
+    return series;
+  }
+
   async addRoomBlock(
     identity: AuthUser,
     roomId: string,
@@ -615,6 +884,7 @@ export class AppService {
     startAt: Date,
     endAt: Date,
     tx: BookingTx = this.prisma,
+    excludeBookingIds: string[] = [],
   ): Promise<{ conflict: boolean; reason?: string }> {
     const block = await tx.roomBlock.findFirst({
       where: {
@@ -629,6 +899,9 @@ export class AppService {
     const booking = await tx.booking.findFirst({
       where: {
         roomId,
+        ...(excludeBookingIds.length > 0
+          ? { id: { notIn: excludeBookingIds } }
+          : {}),
         status: { in: [BookingStatus.APPROVED, BookingStatus.PENDING] },
         startAt: { lt: endAt },
         endAt: { gt: startAt },
@@ -681,6 +954,70 @@ export class AppService {
     ) {
       throw new BadRequestException('Ungültiger Zeitraum');
     }
+  }
+
+  private async loadSeriesForMail(seriesId: string) {
+    return this.prisma.bookingSeries.findUniqueOrThrow({
+      where: { id: seriesId },
+      include: {
+        room: true,
+        user: true,
+        bookings: { orderBy: { startAt: 'asc' } },
+      },
+    });
+  }
+
+  private assertSeriesAccess(
+    actor: { id: string; role: UserRole },
+    series: { userId: string },
+  ) {
+    if (actor.role !== UserRole.ADMIN && series.userId !== actor.id) {
+      throw new ForbiddenException('Keine Berechtigung fuer diese Serie');
+    }
+  }
+
+  private async applySeriesAdminDecision(
+    decidedById: string,
+    seriesId: string,
+    decision: DecisionType,
+    reason?: string,
+  ) {
+    const series = await this.prisma.bookingSeries.findUnique({
+      where: { id: seriesId },
+      include: { bookings: true },
+    });
+    if (!series) throw new NotFoundException('Serie nicht gefunden');
+
+    const pending = series.bookings.filter(
+      (b) => b.status === BookingStatus.PENDING,
+    );
+    if (pending.length === 0) {
+      throw new BadRequestException('Keine ausstehenden Termine in dieser Serie');
+    }
+
+    const nextStatus =
+      decision === DecisionType.APPROVE
+        ? BookingStatus.APPROVED
+        : decision === DecisionType.REJECT
+          ? BookingStatus.REJECTED
+          : BookingStatus.BLOCKED;
+
+    await this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      for (const booking of pending) {
+        await tx.booking.update({
+          where: { id: booking.id },
+          data: { status: nextStatus },
+        });
+        await tx.bookingDecision.create({
+          data: {
+            bookingId: booking.id,
+            decidedById,
+            decision,
+            reason,
+          },
+        });
+      }
+    });
   }
 
   private async applyAdminDecision(

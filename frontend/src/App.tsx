@@ -17,8 +17,19 @@ type Me = {
   city?: string | null
 }
 type Room = { id: string; name: string; description?: string | null }
+type BookingSeriesRef = {
+  id: string
+  recurrence: string
+  untilDate: string
+  title?: string | null
+  description?: string | null
+  room?: { name: string }
+}
+
 type Booking = {
   id: string
+  seriesId?: string | null
+  series?: BookingSeriesRef | null
   startAt: string
   endAt: string
   status: string
@@ -61,6 +72,47 @@ type SeriesOccurrencePreview = {
   endAt: string
   conflict: boolean
   reason?: string
+}
+
+type Workspace = 'calendar' | 'bookings' | 'approvals'
+
+type SeriesGroup = {
+  seriesId: string
+  meta: BookingSeriesRef | null | undefined
+  bookings: Booking[]
+}
+
+function groupBookingsBySeries(bookings: Booking[]): { singles: Booking[]; seriesGroups: SeriesGroup[] } {
+  const singles: Booking[] = []
+  const bySeries = new Map<string, Booking[]>()
+  for (const booking of bookings) {
+    if (booking.seriesId) {
+      const list = bySeries.get(booking.seriesId) ?? []
+      list.push(booking)
+      bySeries.set(booking.seriesId, list)
+    } else {
+      singles.push(booking)
+    }
+  }
+  const seriesGroups = [...bySeries.entries()].map(([seriesId, items]) => ({
+    seriesId,
+    meta: items[0]?.series ?? null,
+    bookings: [...items].sort((a, b) => new Date(a.startAt).getTime() - new Date(b.startAt).getTime()),
+  }))
+  seriesGroups.sort((a, b) => new Date(b.bookings[0]?.startAt ?? 0).getTime() - new Date(a.bookings[0]?.startAt ?? 0).getTime())
+  singles.sort((a, b) => new Date(b.startAt).getTime() - new Date(a.startAt).getTime())
+  return { singles, seriesGroups }
+}
+
+function recurrenceLabel(recurrence: string) {
+  if (recurrence === 'DAILY') return 'Taeglich'
+  if (recurrence === 'WEEKLY') return 'Woechentlich'
+  if (recurrence === 'MONTHLY') return 'Monatlich'
+  return recurrence
+}
+
+function seriesPendingCount(group: SeriesGroup) {
+  return group.bookings.filter((b) => b.status.toUpperCase() === 'PENDING').length
 }
 
 const roleLabels: Record<Me['role'], string> = {
@@ -218,7 +270,9 @@ function App() {
   } | null>(null)
   const [modalOpen, setModalOpen] = useState(false)
   const [detailsOpen, setDetailsOpen] = useState(false)
+  const [seriesScopeChoice, setSeriesScopeChoice] = useState<Booking | null>(null)
   const [editingBookingId, setEditingBookingId] = useState<string | null>(null)
+  const [editingSeries, setEditingSeries] = useState(false)
   const [roomId, setRoomId] = useState('')
   const [startAt, setStartAt] = useState('')
   const [endAt, setEndAt] = useState('')
@@ -231,7 +285,9 @@ function App() {
   const [seriesSkippedStarts, setSeriesSkippedStarts] = useState<string[]>([])
   const [seriesPreviewLoading, setSeriesPreviewLoading] = useState(false)
   const [seriesSubmitLoading, setSeriesSubmitLoading] = useState(false)
-  const [approvalTabOpen, setApprovalTabOpen] = useState(true)
+  const [workspace, setWorkspace] = useState<Workspace>('calendar')
+  const [detailsScope, setDetailsScope] = useState<'single' | 'series'>('single')
+  const [activeSeriesId, setActiveSeriesId] = useState<string | null>(null)
   const [selectedBookingId, setSelectedBookingId] = useState('')
   const [authError, setAuthError] = useState<string | null>(null)
 
@@ -393,7 +449,43 @@ function App() {
     })
   }, [availability.data, filteredRooms, isAdmin, knownBookingsById])
 
+  const myBookingGroups = useMemo(
+    () => groupBookingsBySeries(bookings.data ?? []),
+    [bookings.data],
+  )
+
+  const pendingBookings = (adminBookings.data ?? []).filter((booking) => booking.status.toUpperCase() === 'PENDING')
+  const pendingGroups = useMemo(() => groupBookingsBySeries(pendingBookings), [pendingBookings])
+  const pendingSeriesCount = pendingGroups.seriesGroups.length
+  const pendingSingleCount = pendingGroups.singles.length
+
+  const activeSeriesBookings = useMemo(() => {
+    if (!activeSeriesId) return []
+    const mine = (bookings.data ?? []).filter((b) => b.seriesId === activeSeriesId)
+    const admin = (adminBookings.data ?? []).filter((b) => b.seriesId === activeSeriesId)
+    const map = new Map<string, Booking>()
+    for (const b of [...mine, ...admin]) map.set(b.id, b)
+    return [...map.values()].sort((a, b) => new Date(a.startAt).getTime() - new Date(b.startAt).getTime())
+  }, [activeSeriesId, adminBookings.data, bookings.data])
+
+  const activeSeriesMeta = useMemo(() => {
+    if (!activeSeriesId) return null
+    return (
+      activeSeriesBookings[0]?.series ??
+      pendingGroups.seriesGroups.find((g) => g.seriesId === activeSeriesId)?.meta ??
+      myBookingGroups.seriesGroups.find((g) => g.seriesId === activeSeriesId)?.meta ??
+      null
+    )
+  }, [activeSeriesId, activeSeriesBookings, myBookingGroups.seriesGroups, pendingGroups.seriesGroups])
+
   const selectedBooking = useMemo(() => {
+    if (detailsScope === 'series' && activeSeriesId) {
+      if (selectedBookingId) {
+        const hit = activeSeriesBookings.find((b) => b.id === selectedBookingId)
+        if (hit) return hit
+      }
+      return activeSeriesBookings[0] ?? null
+    }
     if (!selectedBookingId) return null
     if (knownBookingsById.has(selectedBookingId)) return knownBookingsById.get(selectedBookingId) ?? null
     for (const row of roomCalendar) {
@@ -401,13 +493,39 @@ function App() {
       if (match) return match
     }
     return null
-  }, [knownBookingsById, roomCalendar, selectedBookingId])
+  }, [activeSeriesBookings, activeSeriesId, detailsScope, knownBookingsById, roomCalendar, selectedBookingId])
+
+  const canEditSeries = useMemo(() => {
+    if (!activeSeriesId || detailsScope !== 'series') return false
+    if (isAdmin) return true
+    return (bookings.data ?? []).some((b) => b.seriesId === activeSeriesId)
+  }, [activeSeriesId, bookings.data, detailsScope, isAdmin])
 
   const canEditSelected = useMemo(() => {
     if (!selectedBooking || selectedBooking.id.startsWith('block-')) return false
     if (isAdmin) return true
     return (bookings.data ?? []).some((booking) => booking.id === selectedBooking.id)
   }, [bookings.data, isAdmin, selectedBooking])
+
+  const selectedSeriesId = selectedBooking?.seriesId ?? null
+
+  const selectedSeriesPendingCount = useMemo(() => {
+    if (!selectedSeriesId) return 0
+    const seen = new Set<string>()
+    let count = 0
+    for (const booking of [...(adminBookings.data ?? []), ...(bookings.data ?? [])]) {
+      if (booking.seriesId !== selectedSeriesId || seen.has(booking.id)) continue
+      seen.add(booking.id)
+      if (booking.status.toUpperCase() === 'PENDING') count++
+    }
+    return count
+  }, [selectedSeriesId, adminBookings.data, bookings.data])
+
+  const canManageSelectedSeries = useMemo(() => {
+    if (!selectedSeriesId) return false
+    if (isAdmin) return true
+    return (bookings.data ?? []).some((b) => b.seriesId === selectedSeriesId)
+  }, [selectedSeriesId, isAdmin, bookings.data])
 
   const refreshAll = async () => {
     await bookings.refetch()
@@ -511,6 +629,7 @@ function App() {
     await refreshAll()
     setDetailsOpen(false)
     setEditingBookingId(null)
+    setEditingSeries(false)
   }
 
   const deleteBooking = async () => {
@@ -519,12 +638,153 @@ function App() {
     await refreshAll()
     setDetailsOpen(false)
     setEditingBookingId(null)
+    setEditingSeries(false)
     setSelectedBookingId('')
   }
 
   const decide = async (id: string, action: 'approve' | 'reject') => {
     await api.patch(`/admin/bookings/${id}/${action}`, {}, { headers })
     await refreshAll()
+  }
+
+  const decideSeries = async (seriesId: string, action: 'approve' | 'reject') => {
+    await api.patch(`/admin/bookings/series/${seriesId}/${action}`, {}, { headers })
+    await refreshAll()
+  }
+
+  const saveSeriesEdits = async () => {
+    if (!activeSeriesId || !startAt || !endAt) return
+    await api.patch(
+      `/bookings/series/${activeSeriesId}`,
+      {
+        roomId: roomId || undefined,
+        title,
+        description,
+        startAt: localDateTimeInputToIso(startAt),
+        endAt: localDateTimeInputToIso(endAt),
+      },
+      { headers },
+    )
+    await refreshAll()
+    setDetailsOpen(false)
+    setEditingBookingId(null)
+    setEditingSeries(false)
+    setActiveSeriesId(null)
+    setDetailsScope('single')
+  }
+
+  const deleteSeries = async (seriesId?: string) => {
+    const id = seriesId ?? activeSeriesId
+    if (!id) return
+    await api.delete(`/bookings/series/${id}`, { headers })
+    await refreshAll()
+    setDetailsOpen(false)
+    setEditingBookingId(null)
+    setActiveSeriesId(null)
+    setSelectedBookingId('')
+    setDetailsScope('single')
+    setEditingSeries(false)
+  }
+
+  const openSeriesDetails = (seriesId: string, focusBookingId?: string) => {
+    setActiveSeriesId(seriesId)
+    setDetailsScope('series')
+    setSelectedBookingId(focusBookingId ?? '')
+    const sorted =
+      [...(bookings.data ?? []), ...(adminBookings.data ?? [])]
+        .filter((b) => b.seriesId === seriesId)
+        .sort((a, b) => new Date(a.startAt).getTime() - new Date(b.startAt).getTime())
+    const sample = sorted[0]
+    if (sample) {
+      setRoomId(rooms.data?.find((r) => r.name === sample.room?.name)?.id ?? '')
+      setTitle(sample.title ?? sample.series?.title ?? '')
+      setDescription(sample.description ?? sample.series?.description ?? '')
+      setStartAt(toLocalInputValue(new Date(sample.startAt)))
+      setEndAt(toLocalInputValue(new Date(sample.endAt)))
+    }
+    setDetailsOpen(true)
+    setEditingBookingId(null)
+    setEditingSeries(false)
+  }
+
+  const openSingleDetails = (booking: Booking) => {
+    setDetailsScope('single')
+    setActiveSeriesId(booking.seriesId ?? null)
+    setSelectedBookingId(booking.id)
+    setRoomId(rooms.data?.find((r) => r.name === booking.room?.name)?.id ?? '')
+    setStartAt(toLocalInputValue(new Date(booking.startAt)))
+    setEndAt(toLocalInputValue(new Date(booking.endAt)))
+    setTitle(booking.title ?? '')
+    setDescription(booking.description ?? '')
+    setDetailsOpen(true)
+    setEditingBookingId(null)
+    setEditingSeries(false)
+  }
+
+  const populateSingleEditFields = (booking: Booking) => {
+    setEditingBookingId(booking.id)
+    setRoomId(rooms.data?.find((r) => r.name === booking.room?.name)?.id ?? '')
+    setStartAt(toLocalInputValue(new Date(booking.startAt)))
+    setEndAt(toLocalInputValue(new Date(booking.endAt)))
+    setTitle(booking.title ?? '')
+    setDescription(booking.description ?? '')
+  }
+
+  const seriesBookingsFor = (seriesId: string) =>
+    [...(bookings.data ?? []), ...(adminBookings.data ?? [])]
+      .filter((b) => b.seriesId === seriesId)
+      .sort((a, b) => new Date(a.startAt).getTime() - new Date(b.startAt).getTime())
+
+  const populateSeriesEditFields = (seriesId?: string) => {
+    const sid = seriesId ?? activeSeriesId
+    if (!sid) return
+    const first = seriesBookingsFor(sid)[0]
+    if (!first) return
+    setEditingSeries(true)
+    setRoomId(rooms.data?.find((r) => r.name === first.room?.name)?.id ?? '')
+    setTitle(first.title ?? first.series?.title ?? '')
+    setDescription(first.description ?? first.series?.description ?? '')
+    setStartAt(toLocalInputValue(new Date(first.startAt)))
+    setEndAt(toLocalInputValue(new Date(first.endAt)))
+  }
+
+  const startEditBooking = (booking: Booking) => {
+    if (!detailsOpen || selectedBookingId !== booking.id) {
+      openSingleDetails(booking)
+    }
+    if (booking.seriesId) {
+      setSeriesScopeChoice(booking)
+      return
+    }
+    populateSingleEditFields(booking)
+  }
+
+  const startEditSeries = () => {
+    if (!activeSeriesId) return
+    populateSeriesEditFields(activeSeriesId)
+  }
+
+  const openSeriesForEdit = (booking: Booking) => {
+    if (!booking.seriesId) return
+    openSeriesDetails(booking.seriesId, booking.id)
+    populateSeriesEditFields(booking.seriesId)
+  }
+
+  const applySeriesScopeChoice = (scope: 'single' | 'series') => {
+    const booking = seriesScopeChoice
+    if (!booking?.seriesId) return
+    setSeriesScopeChoice(null)
+    if (scope === 'series') {
+      if (!detailsOpen || detailsScope !== 'series' || activeSeriesId !== booking.seriesId) {
+        openSeriesDetails(booking.seriesId, booking.id)
+      }
+      populateSeriesEditFields(booking.seriesId)
+    } else {
+      if (!detailsOpen || selectedBookingId !== booking.id) {
+        openSingleDetails(booking)
+      }
+      populateSingleEditFields(booking)
+    }
   }
 
   const handleGemeindeLogin = async () => {
@@ -595,17 +855,9 @@ function App() {
   }
 
   const openDetails = (booking: Booking, room: Room) => {
-    setSelectedBookingId(booking.id)
-    setRoomId(rooms.data?.find((r) => r.name === room.name)?.id ?? '')
-    setStartAt(toLocalInputValue(new Date(booking.startAt)))
-    setEndAt(toLocalInputValue(new Date(booking.endAt)))
-    setTitle(booking.title ?? '')
-    setDescription(booking.description ?? '')
-    setDetailsOpen(true)
-    setEditingBookingId(null)
+    const enriched: Booking = { ...booking, room: booking.room ?? { name: room.name } }
+    openSingleDetails(enriched)
   }
-
-  const pendingBookings = (adminBookings.data ?? []).filter((booking) => booking.status.toUpperCase() === 'PENDING')
 
   const shiftDay = (deltaDays: number) => {
     const base = dayStartFromInput(selectedDay)
@@ -702,6 +954,31 @@ function App() {
             </button>
           </div>
         </div>
+        <nav className="mt-4 flex flex-wrap gap-2 border-t border-slate-100 pt-4">
+          <button
+            type="button"
+            className={`rounded-lg px-3 py-2 text-sm font-medium ${workspace === 'calendar' ? 'bg-teal-700 text-white' : 'border border-slate-300 text-slate-700'}`}
+            onClick={() => setWorkspace('calendar')}
+          >
+            Kalender
+          </button>
+          <button
+            type="button"
+            className={`rounded-lg px-3 py-2 text-sm font-medium ${workspace === 'bookings' ? 'bg-teal-700 text-white' : 'border border-slate-300 text-slate-700'}`}
+            onClick={() => setWorkspace('bookings')}
+          >
+            Meine Buchungen
+          </button>
+          {isAdmin && (
+            <button
+              type="button"
+              className={`rounded-lg px-3 py-2 text-sm font-medium ${workspace === 'approvals' ? 'bg-teal-700 text-white' : 'border border-slate-300 text-slate-700'}`}
+              onClick={() => setWorkspace('approvals')}
+            >
+              Freigaben ({pendingSeriesCount + pendingSingleCount})
+            </button>
+          )}
+        </nav>
       </header>
 
       <details className="mb-4 rounded-2xl bg-white p-4 shadow-sm ring-1 ring-slate-200/70">
@@ -731,7 +1008,229 @@ function App() {
         </div>
       </details>
 
-      <div className="grid gap-4 2xl:grid-cols-[280px_1fr_360px]">
+      {workspace === 'bookings' && (
+        <section className="rounded-2xl bg-white p-4 shadow-sm ring-1 ring-slate-200/70 sm:p-6">
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+            <h2 className="text-lg font-semibold">Meine Buchungen</h2>
+            <button
+              type="button"
+              className="rounded-lg bg-teal-700 px-3 py-2 text-sm font-medium text-white"
+              onClick={() => {
+                setWorkspace('calendar')
+                setEditingBookingId(null)
+                setModalOpen(true)
+              }}
+            >
+              Neue Buchung
+            </button>
+          </div>
+          {myBookingGroups.seriesGroups.length > 0 && (
+            <div className="mb-6 space-y-3">
+              <h3 className="text-sm font-semibold text-slate-700">Serienbuchungen</h3>
+              {myBookingGroups.seriesGroups.map((group) => (
+                <article key={group.seriesId} className="rounded-xl border border-slate-200 p-3">
+                  <div className="flex flex-wrap items-start justify-between gap-2">
+                    <div>
+                      <div className="font-medium">{group.meta?.title?.trim() || 'Serienbuchung'}</div>
+                      <div className="text-xs text-slate-600">
+                        {group.bookings[0]?.room?.name ?? group.meta?.room?.name ?? 'Raum'} ·{' '}
+                        {recurrenceLabel(group.meta?.recurrence ?? 'WEEKLY')} · {group.bookings.length} Termine
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      className="rounded border border-teal-700 px-2 py-1 text-xs text-teal-800"
+                      onClick={() => openSeriesDetails(group.seriesId)}
+                    >
+                      Serie verwalten
+                    </button>
+                  </div>
+                  <div className="mt-2 max-h-40 overflow-y-auto">
+                    <table className="w-full border-collapse text-xs">
+                      <thead>
+                        <tr className="bg-slate-50 text-left">
+                          <th className="p-2">Beginn</th>
+                          <th className="p-2">Status</th>
+                          <th className="p-2" />
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {group.bookings.map((booking) => (
+                          <tr key={booking.id} className="border-t border-slate-100">
+                            <td className="p-2">{new Date(booking.startAt).toLocaleString('de-DE')}</td>
+                            <td className="p-2">
+                              <span className={`rounded-full px-2 py-0.5 ${bookingClass(booking.status)}`}>
+                                {bookingStatusLabel(booking.status)}
+                              </span>
+                            </td>
+                            <td className="p-2 text-right">
+                              <button
+                                type="button"
+                                className="text-teal-800 underline"
+                                onClick={() => openSingleDetails(booking)}
+                              >
+                                Termin
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </article>
+              ))}
+            </div>
+          )}
+          <div className="space-y-2">
+            <h3 className="text-sm font-semibold text-slate-700">Einzelbuchungen</h3>
+            {myBookingGroups.singles.length === 0 ? (
+              <p className="text-sm text-slate-500">Keine Einzelbuchungen.</p>
+            ) : (
+              <ul className="space-y-2">
+                {myBookingGroups.singles.map((booking) => (
+                  <li key={booking.id} className="rounded-lg border border-slate-200 p-3 text-sm">
+                    <button type="button" className="w-full text-left" onClick={() => openSingleDetails(booking)}>
+                      <div className="font-medium">{displayBookingTitle(booking)}</div>
+                      <div className="text-slate-600">
+                        {booking.room?.name} · {new Date(booking.startAt).toLocaleString('de-DE')}
+                      </div>
+                      <span className={`mt-1 inline-block rounded-full px-2 py-0.5 text-xs ${bookingClass(booking.status)}`}>
+                        {bookingStatusLabel(booking.status)}
+                      </span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </section>
+      )}
+
+      {workspace === 'approvals' && isAdmin && (
+        <section className="rounded-2xl bg-white p-4 shadow-sm ring-1 ring-slate-200/70 sm:p-6">
+          <h2 className="mb-4 text-lg font-semibold">Freigaben</h2>
+          {pendingBookings.length === 0 ? (
+            <p className="text-sm text-slate-500">Keine offenen Anfragen.</p>
+          ) : (
+            <div className="space-y-4">
+              {pendingGroups.seriesGroups.map((group) => (
+                <article key={group.seriesId} className="rounded-xl border border-amber-200 bg-amber-50/40 p-4">
+                  <div className="flex flex-wrap items-start justify-between gap-2">
+                    <div>
+                      <div className="font-semibold">
+                        {group.bookings[0]?.user?.displayName} · {group.bookings[0]?.room?.name}
+                      </div>
+                      <div className="text-sm text-slate-600">
+                        Serienbuchung · {recurrenceLabel(group.meta?.recurrence ?? 'WEEKLY')} ·{' '}
+                        {seriesPendingCount(group)} ausstehend / {group.bookings.length} Termine
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        className="rounded bg-teal-700 px-2 py-1 text-xs text-white"
+                        onClick={() => void decideSeries(group.seriesId, 'approve')}
+                      >
+                        Ganze Serie freigeben
+                      </button>
+                      <button
+                        type="button"
+                        className="rounded bg-rose-600 px-2 py-1 text-xs text-white"
+                        onClick={() => void decideSeries(group.seriesId, 'reject')}
+                      >
+                        Ganze Serie ablehnen
+                      </button>
+                      <button
+                        type="button"
+                        className="rounded border border-teal-700 px-2 py-1 text-xs text-teal-800"
+                        onClick={() => openSeriesDetails(group.seriesId)}
+                      >
+                        Serie bearbeiten
+                      </button>
+                    </div>
+                  </div>
+                  <table className="mt-3 w-full border-collapse text-xs">
+                    <thead>
+                      <tr className="bg-white text-left">
+                        <th className="p-2">Beginn</th>
+                        <th className="p-2">Ende</th>
+                        <th className="p-2">Aktion</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {group.bookings.map((booking) => (
+                        <tr key={booking.id} className="border-t border-amber-100">
+                          <td className="p-2">{new Date(booking.startAt).toLocaleString('de-DE')}</td>
+                          <td className="p-2">{new Date(booking.endAt).toLocaleString('de-DE')}</td>
+                          <td className="p-2">
+                            <div className="flex flex-wrap gap-1">
+                              <button
+                                type="button"
+                                className="rounded bg-teal-700 px-2 py-0.5 text-white"
+                                onClick={() => void decide(booking.id, 'approve')}
+                              >
+                                Freigeben
+                              </button>
+                              <button
+                                type="button"
+                                className="rounded bg-rose-600 px-2 py-0.5 text-white"
+                                onClick={() => void decide(booking.id, 'reject')}
+                              >
+                                Ablehnen
+                              </button>
+                              <button
+                                type="button"
+                                className="rounded border border-slate-300 px-2 py-0.5"
+                                onClick={() => startEditBooking(booking)}
+                              >
+                                Bearbeiten
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </article>
+              ))}
+              {pendingGroups.singles.map((booking) => (
+                <article key={booking.id} className="rounded-xl border border-slate-200 p-4">
+                  <div className="font-medium">
+                    {booking.user?.displayName} · {booking.room?.name}
+                  </div>
+                  <div className="mb-2 text-sm">{new Date(booking.startAt).toLocaleString('de-DE')}</div>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      className="rounded bg-teal-700 px-2 py-1 text-xs text-white"
+                      onClick={() => void decide(booking.id, 'approve')}
+                    >
+                      Freigeben
+                    </button>
+                    <button
+                      type="button"
+                      className="rounded bg-rose-600 px-2 py-1 text-xs text-white"
+                      onClick={() => void decide(booking.id, 'reject')}
+                    >
+                      Ablehnen
+                    </button>
+                    <button
+                      type="button"
+                      className="rounded border border-slate-300 px-2 py-1 text-xs"
+                      onClick={() => startEditBooking(booking)}
+                    >
+                      Bearbeiten
+                    </button>
+                  </div>
+                </article>
+              ))}
+            </div>
+          )}
+        </section>
+      )}
+
+      {workspace === 'calendar' && (
+      <div className="grid gap-4 2xl:grid-cols-[280px_1fr_280px]">
         {/* Mobile/Tablet: Filter als Akkordeon */}
         <details className="rounded-2xl bg-white p-4 shadow-sm ring-1 ring-slate-200/70 2xl:hidden">
           <summary className="cursor-pointer select-none text-lg font-semibold">Filter</summary>
@@ -920,6 +1419,8 @@ function App() {
                               booking.isMasked
                                 ? 'Blockiert'
                                 : `Details: ${displayBookingTitle(booking)}${
+                                    booking.seriesId ? ' · Serienbuchung' : ''
+                                  }${
                                     canSeePerson && booking.user?.displayName ? ` (${booking.user.displayName})` : ''
                                   }`
                             }
@@ -930,7 +1431,12 @@ function App() {
                                 className="h-full w-full text-left"
                                 onClick={() => openDetails(booking, room)}
                               >
-                                <span className="block truncate font-medium">{displayBookingTitle(booking)}</span>
+                                <span className="block truncate font-medium">
+                                  {booking.seriesId ? (
+                                    <span className="mr-0.5 font-semibold opacity-80">Serie ·</span>
+                                  ) : null}
+                                  {displayBookingTitle(booking)}
+                                </span>
                                 {canSeePerson && booking.user?.displayName && (
                                   <span className="block truncate opacity-90">{booking.user.displayName}</span>
                                 )}
@@ -1038,12 +1544,23 @@ function App() {
                               booking.isMasked
                                 ? 'Blockiert'
                                 : `Details anzeigen: ${displayBookingTitle(booking)}${
+                                    booking.seriesId ? ' · Serienbuchung' : ''
+                                  }${
                                     canSeePerson && booking.user?.displayName ? ` (${booking.user.displayName})` : ''
                                   }`
                             }
                           >
                             <span className="block truncate text-left leading-tight">
-                              {booking.isMasked ? 'Blockiert' : displayBookingTitle(booking)}
+                              {booking.isMasked ? (
+                                'Blockiert'
+                              ) : (
+                                <>
+                                  {booking.seriesId ? (
+                                    <span className="mr-0.5 font-semibold opacity-80">Serie ·</span>
+                                  ) : null}
+                                  {displayBookingTitle(booking)}
+                                </>
+                              )}
                             </span>
                             {canSeePerson && booking.user?.displayName && (
                               <span className="block truncate text-left text-[10px] opacity-90">{booking.user.displayName}</span>
@@ -1068,84 +1585,24 @@ function App() {
           </div>
         </section>
 
-        {/* Mobile/Tablet: Buchungen als Akkordeon */}
         <details className="rounded-2xl bg-white p-4 shadow-sm ring-1 ring-slate-200/70 2xl:hidden">
-          <summary className="cursor-pointer select-none text-lg font-semibold">Buchungen</summary>
-          <div className="mt-4 space-y-4">
-            <button
-              className="w-full rounded-lg bg-teal-700 px-3 py-2 font-medium text-white"
-              onClick={() => {
-                setEditingBookingId(null)
-                setTitle('')
-                setDescription('')
-                setSeriesPreview(null)
-                setSeriesSkippedStarts([])
-                setShowRecurrence(false)
-                setModalOpen(true)
-              }}
-              title={isExtended ? 'Erstellt sofort eine bestaetigte Buchung' : 'Sendet eine Buchungsanfrage zur Pruefung'}
-            >
-              {isExtended ? 'Direkt buchen' : 'Buchung anfragen'}
-            </button>
-            <div className="space-y-2">
-              <h3 className="text-sm font-semibold">Meine Buchungen</h3>
-              <ul className="space-y-2">
-                {(bookings.data ?? []).slice(0, 8).map((booking) => (
-                  <li key={booking.id} className="rounded-lg border border-slate-200 p-2 text-xs">
-                    <button
-                      className="w-full text-left"
-                      onClick={() => {
-                        setSelectedBookingId(booking.id)
-                        setDetailsOpen(true)
-                      }}
-                      title="Details anzeigen und ggf. bearbeiten"
-                    >
-                      <div className="font-medium">{booking.room?.name ?? 'Raum'}</div>
-                      <div>{new Date(booking.startAt).toLocaleString()}</div>
-                      <span className={`mt-1 inline-block rounded-full px-2 py-0.5 ${bookingClass(booking.status)}`}>
-                        {bookingStatusLabel(booking.status)}
-                      </span>
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            </div>
-
-            {isAdmin && (
-              <div className="rounded-xl border border-slate-200 p-3">
-                <button
-                  className="mb-2 text-left text-sm font-semibold text-teal-800"
-                  onClick={() => setApprovalTabOpen((prev) => !prev)}
-                  title="Zeigt oder versteckt offene Genehmigungsanfragen"
-                >
-                  Genehmigungs-Tab ({pendingBookings.length})
-                </button>
-                {approvalTabOpen && (
-                  <ul className="space-y-2">
-                    {pendingBookings.map((booking) => (
-                      <li key={booking.id} className="rounded-lg border border-slate-200 p-2 text-xs">
-                        <div className="font-medium">
-                          {booking.user?.displayName} · {booking.room?.name}
-                        </div>
-                        <div className="mb-2">{new Date(booking.startAt).toLocaleString()}</div>
-                        <div className="flex gap-2">
-                          <button className="rounded bg-teal-700 px-2 py-1 text-white" onClick={() => decide(booking.id, 'approve')}>
-                            Freigeben
-                          </button>
-                          <button className="rounded bg-rose-600 px-2 py-1 text-white" onClick={() => decide(booking.id, 'reject')}>
-                            Ablehnen
-                          </button>
-                        </div>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-            )}
-          </div>
+          <summary className="cursor-pointer select-none text-lg font-semibold">Schnell-Buchung</summary>
+          <button
+            className="mt-4 w-full rounded-lg bg-teal-700 px-3 py-2 font-medium text-white"
+            onClick={() => {
+              setEditingBookingId(null)
+              setTitle('')
+              setDescription('')
+              setSeriesPreview(null)
+              setSeriesSkippedStarts([])
+              setShowRecurrence(false)
+              setModalOpen(true)
+            }}
+          >
+            {isExtended ? 'Direkt buchen' : 'Buchung anfragen'}
+          </button>
         </details>
 
-        {/* Desktop/Wideboard: Buchungen rechts fix */}
         <aside className="hidden space-y-4 rounded-2xl bg-white p-4 shadow-sm ring-1 ring-slate-200/70 2xl:block">
           <h2 className="text-lg font-semibold">Schnell-Buchung</h2>
           <button
@@ -1159,67 +1616,58 @@ function App() {
               setShowRecurrence(false)
               setModalOpen(true)
             }}
-            title={isExtended ? 'Erstellt sofort eine bestaetigte Buchung' : 'Sendet eine Buchungsanfrage zur Pruefung'}
           >
             {isExtended ? 'Direkt buchen' : 'Buchung anfragen'}
           </button>
-          <div className="space-y-2">
-            <h3 className="text-sm font-semibold">Meine Buchungen</h3>
-            <ul className="space-y-2">
-              {(bookings.data ?? []).slice(0, 6).map((booking) => (
-                <li key={booking.id} className="rounded-lg border border-slate-200 p-2 text-xs">
-                  <button
-                    className="w-full text-left"
-                    onClick={() => {
-                      setSelectedBookingId(booking.id)
-                      setDetailsOpen(true)
-                    }}
-                    title="Details anzeigen und ggf. bearbeiten"
-                  >
-                    <div className="font-medium">{booking.room?.name ?? 'Raum'}</div>
-                    <div>{new Date(booking.startAt).toLocaleString()}</div>
-                    <span className={`mt-1 inline-block rounded-full px-2 py-0.5 ${bookingClass(booking.status)}`}>
-                      {bookingStatusLabel(booking.status)}
-                    </span>
-                  </button>
-                </li>
-              ))}
-            </ul>
-          </div>
-
-          {isAdmin && (
-            <div className="rounded-xl border border-slate-200 p-3">
-              <button
-                className="mb-2 text-left text-sm font-semibold text-teal-800"
-                onClick={() => setApprovalTabOpen((prev) => !prev)}
-                title="Zeigt oder versteckt offene Genehmigungsanfragen"
-              >
-                Genehmigungs-Tab ({pendingBookings.length})
-              </button>
-              {approvalTabOpen && (
-                <ul className="space-y-2">
-                  {pendingBookings.map((booking) => (
-                    <li key={booking.id} className="rounded-lg border border-slate-200 p-2 text-xs">
-                      <div className="font-medium">
-                        {booking.user?.displayName} · {booking.room?.name}
-                      </div>
-                      <div className="mb-2">{new Date(booking.startAt).toLocaleString()}</div>
-                      <div className="flex gap-2">
-                        <button className="rounded bg-teal-700 px-2 py-1 text-white" onClick={() => decide(booking.id, 'approve')}>
-                          Freigeben
-                        </button>
-                        <button className="rounded bg-rose-600 px-2 py-1 text-white" onClick={() => decide(booking.id, 'reject')}>
-                          Ablehnen
-                        </button>
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-          )}
+          <p className="text-xs text-slate-500">
+            Buchungen und Freigaben finden Sie in den Reitern oben.
+          </p>
         </aside>
       </div>
+      )}
+
+      {seriesScopeChoice && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
+          <div className="w-full max-w-md rounded-2xl bg-white p-5 shadow-xl" role="dialog" aria-labelledby="series-scope-title">
+            <h3 id="series-scope-title" className="text-lg font-semibold">
+              Serientermin bearbeiten
+            </h3>
+            <p className="mt-2 text-sm text-slate-600">
+              Dieser Termin gehoert zu einer Serienbuchung. Moechten Sie nur diesen Termin oder die gesamte Serie
+              bearbeiten?
+            </p>
+            <p className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm">
+              <span className="font-medium">{displayBookingTitle(seriesScopeChoice)}</span>
+              <br />
+              {seriesScopeChoice.room?.name ?? 'Raum'} ·{' '}
+              {new Date(seriesScopeChoice.startAt).toLocaleString('de-DE')}
+            </p>
+            <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:justify-end">
+              <button
+                type="button"
+                className="rounded border border-slate-300 px-3 py-2 text-sm"
+                onClick={() => setSeriesScopeChoice(null)}
+              >
+                Abbrechen
+              </button>
+              <button
+                type="button"
+                className="rounded border border-teal-700 px-3 py-2 text-sm text-teal-800"
+                onClick={() => applySeriesScopeChoice('single')}
+              >
+                Einzelnen Termin
+              </button>
+              <button
+                type="button"
+                className="rounded bg-teal-700 px-3 py-2 text-sm font-medium text-white"
+                onClick={() => applySeriesScopeChoice('series')}
+              >
+                Gesamte Serie bearbeiten
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {modalOpen && (
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/35 p-4">
@@ -1389,114 +1837,389 @@ function App() {
         </div>
       )}
 
-      {detailsOpen && selectedBooking && (
+      {detailsOpen && (selectedBooking || (detailsScope === 'series' && activeSeriesId)) && (
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/35 p-4">
-          <div className="w-full max-w-xl rounded-2xl bg-white p-5 shadow-xl">
-            <h3 className="text-lg font-semibold">Buchungsdetails</h3>
-            <div className="mt-3 space-y-2 text-sm">
-              <div>
-                <strong>Titel:</strong> {displayBookingTitle(selectedBooking)}
-              </div>
-              {selectedBooking.description?.trim() ? (
-                <div>
-                  <strong>Beschreibung:</strong>
-                  <div className="mt-1 whitespace-pre-wrap rounded border border-slate-100 bg-slate-50 p-2 text-slate-800">
-                    {selectedBooking.description}
-                  </div>
-                </div>
-              ) : null}
-              <div>
-                <strong>Status:</strong> {bookingStatusLabel(selectedBooking.status)}
-              </div>
-              <div>
-                <strong>Raum:</strong> {selectedBooking.room?.name ?? 'Raum'}
-              </div>
-              <div>
-                <strong>Start:</strong> {new Date(selectedBooking.startAt).toLocaleString()}
-              </div>
-              <div>
-                <strong>Ende:</strong> {new Date(selectedBooking.endAt).toLocaleString()}
-              </div>
-              {(isAdmin || canEditSelected) && selectedBooking.user?.displayName && (
-                <div>
-                  <strong>Person:</strong> {selectedBooking.user.displayName}
-                </div>
+          <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl bg-white p-5 shadow-xl">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h3 className="text-lg font-semibold">
+                {detailsScope === 'series' ? 'Serienbuchung' : 'Buchungsdetails'}
+              </h3>
+              {activeSeriesId && detailsScope === 'single' && selectedBooking?.seriesId && (
+                <button
+                  type="button"
+                  className="text-sm text-teal-800 underline"
+                  onClick={() => openSeriesDetails(activeSeriesId, selectedBooking.id)}
+                >
+                  Zur Serie wechseln
+                </button>
               )}
-              {isAdmin && selectedBooking.user && (
-                <>
-                  <div>
-                    <strong>Mail:</strong> {selectedBooking.user.email}
-                  </div>
-                  <div>
-                    <strong>Telefon:</strong> {selectedBooking.user.phone ?? 'Nicht hinterlegt'}
-                  </div>
-                  <div>
-                    <strong>Strasse:</strong> {selectedBooking.user.street ?? 'Nicht hinterlegt'}{' '}
-                    {selectedBooking.user.houseNumber ?? ''}
-                  </div>
-                  <div>
-                    <strong>PLZ / Stadt:</strong> {selectedBooking.user.postalCode ?? '-'} {selectedBooking.user.city ?? ''}
-                  </div>
-                  <div>
-                    <strong>Geburtsdatum:</strong> {formatBirthDate(selectedBooking.user.birthDate)}
-                  </div>
-                </>
+              {activeSeriesId && detailsScope === 'series' && selectedBooking && (
+                <button
+                  type="button"
+                  className="text-sm text-teal-800 underline"
+                  onClick={() => openSingleDetails(selectedBooking)}
+                >
+                  Einzelnen Termin anzeigen
+                </button>
               )}
             </div>
 
-            {canEditSelected && (
-              <div className="mt-4 rounded-xl border border-slate-200 p-3">
-                <button
-                  className="mb-3 rounded border border-slate-300 px-3 py-1 text-sm"
-                  onClick={() => {
-                    setEditingBookingId(selectedBooking.id)
-                    setRoomId(rooms.data?.find((room) => room.name === selectedBooking.room?.name)?.id ?? '')
-                    setStartAt(toLocalInputValue(new Date(selectedBooking.startAt)))
-                    setEndAt(toLocalInputValue(new Date(selectedBooking.endAt)))
-                    setTitle(selectedBooking.title ?? '')
-                    setDescription(selectedBooking.description ?? '')
-                  }}
-                >
-                  Termin bearbeiten
-                </button>
-                {editingBookingId === selectedBooking.id && (
-                  <div className="grid gap-2 md:grid-cols-2">
-                    <select className="rounded border p-2" value={roomId} onChange={(e) => setRoomId(e.target.value)}>
-                      <option value="">Raum waehlen</option>
-                      {(rooms.data ?? []).map((room) => (
-                        <option key={room.id} value={room.id}>
-                          {room.name}
-                        </option>
+            {detailsScope === 'series' && activeSeriesId ? (
+              <>
+                <div className="mt-3 space-y-2 text-sm">
+                  <div>
+                    <strong>Titel:</strong> {activeSeriesMeta?.title?.trim() || title || 'Serienbuchung'}
+                  </div>
+                  <div>
+                    <strong>Raum:</strong> {activeSeriesBookings[0]?.room?.name ?? activeSeriesMeta?.room?.name ?? 'Raum'}
+                  </div>
+                  <div>
+                    <strong>Wiederholung:</strong> {recurrenceLabel(activeSeriesMeta?.recurrence ?? 'WEEKLY')}
+                  </div>
+                  <div>
+                    <strong>Termine:</strong> {activeSeriesBookings.length}
+                  </div>
+                  {isAdmin && selectedBooking?.user && (
+                    <div>
+                      <strong>Person:</strong> {selectedBooking.user.displayName} ({selectedBooking.user.email})
+                    </div>
+                  )}
+                </div>
+                <div className="mt-3 max-h-48 overflow-y-auto rounded-lg border border-slate-200">
+                  <table className="w-full border-collapse text-xs">
+                    <thead className="sticky top-0 bg-slate-100">
+                      <tr>
+                        <th className="p-2 text-left">Beginn</th>
+                        <th className="p-2 text-left">Ende</th>
+                        <th className="p-2 text-left">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {activeSeriesBookings.map((booking) => (
+                        <tr
+                          key={booking.id}
+                          className={`border-t border-slate-100 ${selectedBookingId === booking.id ? 'bg-teal-50' : ''}`}
+                        >
+                          <td className="p-2">{new Date(booking.startAt).toLocaleString('de-DE')}</td>
+                          <td className="p-2">{new Date(booking.endAt).toLocaleString('de-DE')}</td>
+                          <td className="p-2">{bookingStatusLabel(booking.status)}</td>
+                        </tr>
                       ))}
-                    </select>
-                    <input className="rounded border p-2" type="datetime-local" value={startAt} onChange={(e) => setStartAt(e.target.value)} />
-                    <input className="rounded border p-2" type="datetime-local" value={endAt} onChange={(e) => setEndAt(e.target.value)} />
-                    <input className="rounded border p-2 md:col-span-2" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Titel" />
-                    <textarea
-                      className="min-h-20 rounded border p-2 md:col-span-2"
-                      value={description}
-                      onChange={(e) => setDescription(e.target.value)}
-                      placeholder="Beschreibung"
-                      rows={3}
-                    />
-                    <button className="rounded bg-teal-700 px-3 py-2 text-white md:col-span-2" onClick={saveBookingEdits}>
-                      Aenderungen speichern
+                    </tbody>
+                  </table>
+                </div>
+                {canEditSeries && !editingSeries && (
+                  <div className="mt-4">
+                    <button
+                      type="button"
+                      className="rounded border border-teal-700 px-3 py-2 text-sm text-teal-800"
+                      onClick={() => startEditSeries()}
+                    >
+                      Bearbeiten
                     </button>
                   </div>
                 )}
-              </div>
-            )}
+                {canEditSeries && editingSeries && (
+                  <div className="mt-4 rounded-xl border border-slate-200 p-3">
+                    <p className="mb-2 text-sm font-medium">Ganze Serie bearbeiten</p>
+                    <p className="mb-3 text-xs text-slate-600">
+                      Start und Ende beziehen sich auf den ersten Termin; alle Termine werden gemeinsam verschoben.
+                    </p>
+                    <div className="grid gap-2 md:grid-cols-2">
+                      <select className="rounded border p-2 text-sm md:col-span-2" value={roomId} onChange={(e) => setRoomId(e.target.value)}>
+                        <option value="">Raum waehlen</option>
+                        {(rooms.data ?? []).map((room) => (
+                          <option key={room.id} value={room.id}>
+                            {room.name}
+                          </option>
+                        ))}
+                      </select>
+                      <label className="text-sm">
+                        <span className="mb-1 block text-slate-700">Start (erster Termin)</span>
+                        <input
+                          className="w-full rounded border p-2 text-sm"
+                          type="datetime-local"
+                          value={startAt}
+                          onChange={(e) => setStartAt(e.target.value)}
+                        />
+                      </label>
+                      <label className="text-sm">
+                        <span className="mb-1 block text-slate-700">Ende (erster Termin)</span>
+                        <input
+                          className="w-full rounded border p-2 text-sm"
+                          type="datetime-local"
+                          value={endAt}
+                          onChange={(e) => setEndAt(e.target.value)}
+                        />
+                      </label>
+                      <input
+                        className="rounded border p-2 text-sm md:col-span-2"
+                        value={title}
+                        onChange={(e) => setTitle(e.target.value)}
+                        placeholder="Titel (alle Termine)"
+                      />
+                      <textarea
+                        className="min-h-20 rounded border p-2 text-sm md:col-span-2"
+                        value={description}
+                        onChange={(e) => setDescription(e.target.value)}
+                        placeholder="Beschreibung (alle Termine)"
+                        rows={3}
+                      />
+                      <div className="flex flex-wrap gap-2 md:col-span-2">
+                        <button type="button" className="rounded bg-teal-700 px-3 py-2 text-sm text-white" onClick={() => void saveSeriesEdits()}>
+                          Serie speichern
+                        </button>
+                        <button
+                          type="button"
+                          className="rounded border border-slate-300 px-3 py-2 text-sm"
+                          onClick={() => setEditingSeries(false)}
+                        >
+                          Abbrechen
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+                {isAdmin && seriesPendingCount({ seriesId: activeSeriesId, meta: activeSeriesMeta, bookings: activeSeriesBookings }) > 0 && (
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      className="rounded bg-teal-700 px-3 py-2 text-sm text-white"
+                      onClick={() => void decideSeries(activeSeriesId, 'approve')}
+                    >
+                      Ganze Serie freigeben
+                    </button>
+                    <button
+                      type="button"
+                      className="rounded bg-rose-600 px-3 py-2 text-sm text-white"
+                      onClick={() => void decideSeries(activeSeriesId, 'reject')}
+                    >
+                      Ganze Serie ablehnen
+                    </button>
+                  </div>
+                )}
+                <div className="mt-4 flex flex-wrap justify-between gap-2">
+                  {canEditSeries && (
+                    <button type="button" className="rounded bg-rose-600 px-3 py-2 text-sm text-white" onClick={() => void deleteSeries()}>
+                      Ganze Serie loeschen
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="rounded border px-3 py-2 text-sm"
+                    onClick={() => {
+                      setDetailsOpen(false)
+                      setDetailsScope('single')
+                      setActiveSeriesId(null)
+                      setEditingSeries(false)
+                      setEditingBookingId(null)
+                    }}
+                  >
+                    Schliessen
+                  </button>
+                </div>
+              </>
+            ) : selectedBooking ? (
+              <>
+                <div className="mt-3 space-y-2 text-sm">
+                  <div>
+                    <strong>Titel:</strong> {displayBookingTitle(selectedBooking)}
+                  </div>
+                  {selectedBooking.description?.trim() ? (
+                    <div>
+                      <strong>Beschreibung:</strong>
+                      <div className="mt-1 whitespace-pre-wrap rounded border border-slate-100 bg-slate-50 p-2 text-slate-800">
+                        {selectedBooking.description}
+                      </div>
+                    </div>
+                  ) : null}
+                  <div>
+                    <strong>Status:</strong> {bookingStatusLabel(selectedBooking.status)}
+                  </div>
+                  <div>
+                    <strong>Raum:</strong> {selectedBooking.room?.name ?? 'Raum'}
+                  </div>
+                  <div>
+                    <strong>Start:</strong> {new Date(selectedBooking.startAt).toLocaleString()}
+                  </div>
+                  <div>
+                    <strong>Ende:</strong> {new Date(selectedBooking.endAt).toLocaleString()}
+                  </div>
+                  {(isAdmin || canEditSelected) && selectedBooking.user?.displayName && (
+                    <div>
+                      <strong>Person:</strong> {selectedBooking.user.displayName}
+                    </div>
+                  )}
+                  {isAdmin && selectedBooking.user && (
+                    <>
+                      <div>
+                        <strong>Mail:</strong> {selectedBooking.user.email}
+                      </div>
+                      <div>
+                        <strong>Telefon:</strong> {selectedBooking.user.phone ?? 'Nicht hinterlegt'}
+                      </div>
+                    </>
+                  )}
+                  {selectedSeriesId && (
+                    <div className="rounded-lg border border-teal-100 bg-teal-50/50 px-3 py-2 text-slate-700">
+                      <strong>Serie:</strong>{' '}
+                      {recurrenceLabel(selectedBooking.series?.recurrence ?? 'WEEKLY')}
+                      {selectedSeriesPendingCount > 0 && isAdmin && (
+                        <span className="text-slate-600">
+                          {' '}
+                          · {selectedSeriesPendingCount} ausstehende Termine in der Serie
+                        </span>
+                      )}
+                    </div>
+                  )}
+                </div>
 
-            <div className="mt-4 flex justify-between gap-2">
-              {canEditSelected && (
-                <button className="rounded bg-rose-600 px-3 py-2 text-white" onClick={deleteBooking}>
-                  Termin loeschen
-                </button>
-              )}
-              <button className="rounded border px-3 py-2" onClick={() => setDetailsOpen(false)}>
-                Schliessen
-              </button>
-            </div>
+                {canEditSelected && editingBookingId !== selectedBooking.id && (
+                  <div className="mt-4">
+                    <button
+                      type="button"
+                      className="rounded border border-teal-700 px-3 py-2 text-sm text-teal-800"
+                      onClick={() => startEditBooking(selectedBooking)}
+                    >
+                      Bearbeiten
+                    </button>
+                  </div>
+                )}
+
+                {selectedSeriesId &&
+                  (canManageSelectedSeries || (isAdmin && selectedSeriesPendingCount > 0)) && (
+                  <div className="mt-4 space-y-2 rounded-xl border border-slate-200 p-3">
+                    <p className="text-sm font-medium text-slate-800">Gesamte Serie</p>
+                    <div className="flex flex-wrap gap-2">
+                      {canManageSelectedSeries && (
+                        <>
+                          <button
+                            type="button"
+                            className="rounded border border-teal-700 px-3 py-2 text-sm text-teal-800"
+                            onClick={() => openSeriesForEdit(selectedBooking)}
+                          >
+                            Gesamte Serie bearbeiten
+                          </button>
+                          <button
+                            type="button"
+                            className="rounded bg-rose-600 px-3 py-2 text-sm text-white"
+                            onClick={() => void deleteSeries(selectedSeriesId)}
+                          >
+                            Ganze Serie loeschen
+                          </button>
+                        </>
+                      )}
+                      {isAdmin && selectedSeriesPendingCount > 0 && (
+                        <>
+                          <button
+                            type="button"
+                            className="rounded bg-teal-700 px-3 py-2 text-sm text-white"
+                            onClick={() => void decideSeries(selectedSeriesId, 'approve')}
+                          >
+                            Ganze Serie freigeben
+                          </button>
+                          <button
+                            type="button"
+                            className="rounded bg-rose-600 px-3 py-2 text-sm text-white"
+                            onClick={() => void decideSeries(selectedSeriesId, 'reject')}
+                          >
+                            Ganze Serie ablehnen
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                )}
+                {canEditSelected && editingBookingId === selectedBooking.id && (
+                  <div className="mt-4 rounded-xl border border-slate-200 p-3">
+                    <p className="mb-2 text-sm font-medium">Einzelnen Termin bearbeiten</p>
+                    {selectedBooking.seriesId && (
+                      <p className="mb-3 text-xs text-amber-800">
+                        Beim Speichern wird dieser Termin von der Serie getrennt und als eigenstaendige Buchung gefuehrt.
+                      </p>
+                    )}
+                    <div className="grid gap-2 md:grid-cols-2">
+                      <select className="rounded border p-2 md:col-span-2" value={roomId} onChange={(e) => setRoomId(e.target.value)}>
+                        <option value="">Raum waehlen</option>
+                        {(rooms.data ?? []).map((room) => (
+                          <option key={room.id} value={room.id}>
+                            {room.name}
+                          </option>
+                        ))}
+                      </select>
+                      <input className="rounded border p-2" type="datetime-local" value={startAt} onChange={(e) => setStartAt(e.target.value)} />
+                      <input className="rounded border p-2" type="datetime-local" value={endAt} onChange={(e) => setEndAt(e.target.value)} />
+                      <input className="rounded border p-2 md:col-span-2" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Titel" />
+                      <textarea
+                        className="min-h-20 rounded border p-2 md:col-span-2"
+                        value={description}
+                        onChange={(e) => setDescription(e.target.value)}
+                        placeholder="Beschreibung"
+                        rows={3}
+                      />
+                      <div className="flex flex-wrap gap-2 md:col-span-2">
+                        <button type="button" className="rounded bg-teal-700 px-3 py-2 text-white" onClick={() => void saveBookingEdits()}>
+                          Termin speichern
+                        </button>
+                        <button
+                          type="button"
+                          className="rounded border border-slate-300 px-3 py-2 text-sm"
+                          onClick={() => setEditingBookingId(null)}
+                        >
+                          Abbrechen
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {isAdmin &&
+                  (selectedBooking.status.toUpperCase() === 'PENDING' || selectedSeriesPendingCount > 0) && (
+                  <div className="mt-3 space-y-2">
+                    {selectedBooking.status.toUpperCase() === 'PENDING' && (
+                      <div className="flex flex-wrap gap-2">
+                        <span className="w-full text-xs font-medium text-slate-600">Dieser Termin</span>
+                        <button
+                          type="button"
+                          className="rounded bg-teal-700 px-3 py-2 text-sm text-white"
+                          onClick={() => void decide(selectedBooking.id, 'approve')}
+                        >
+                          Freigeben
+                        </button>
+                        <button
+                          type="button"
+                          className="rounded bg-rose-600 px-3 py-2 text-sm text-white"
+                          onClick={() => void decide(selectedBooking.id, 'reject')}
+                        >
+                          Ablehnen
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                <div className="mt-4 flex flex-wrap justify-between gap-2">
+                  {canEditSelected && (
+                    <button type="button" className="rounded bg-rose-600 px-3 py-2 text-sm text-white" onClick={() => void deleteBooking()}>
+                      Termin loeschen
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="rounded border px-3 py-2 text-sm"
+                    onClick={() => {
+                      setDetailsOpen(false)
+                      setDetailsScope('single')
+                      setActiveSeriesId(null)
+                      setEditingSeries(false)
+                      setEditingBookingId(null)
+                    }}
+                  >
+                    Schliessen
+                  </button>
+                </div>
+              </>
+            ) : null}
           </div>
         </div>
       )}
