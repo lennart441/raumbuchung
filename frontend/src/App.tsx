@@ -163,7 +163,6 @@ const TIMELINE_MINUTES = (DAY_END_HOUR - DAY_START_HOUR) * 60
 const MOBILE_SLOT_HOURS = 2
 const MOBILE_SLOT_MINUTES = MOBILE_SLOT_HOURS * 60
 const MOBILE_SLOT_COUNT = TIMELINE_MINUTES / MOBILE_SLOT_MINUTES
-const MOBILE_ROW_HEIGHT_PX = 52
 
 function toLocalInputValue(date: Date) {
   const year = date.getFullYear()
@@ -1447,53 +1446,53 @@ function App() {
 
           {/* Mobile: vertikale Zeitleiste, Räume als Spalten, Tippen statt Ziehen */}
           <div className="md:hidden">
-            <div
-              className="mb-2 grid gap-1"
-              style={{ gridTemplateColumns: `2.75rem repeat(${Math.max(roomCalendar.length, 1)}, minmax(0, 1fr))` }}
-            >
-              <div />
-              {roomCalendar.map(({ room }) => (
-                <div key={room.id} className="rounded-lg border border-slate-200 px-1.5 py-1.5 text-center text-[10px] font-semibold leading-tight">
-                  <div className="flex items-center justify-center gap-0.5">
-                    <span className="line-clamp-2">{room.name}</span>
-                    {room.description && (
-                      <span
-                        className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-slate-200 text-[9px] font-semibold text-slate-700"
-                        title={room.description}
-                      >
-                        i
-                      </span>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            <div className="max-h-[min(70vh,640px)] overflow-y-auto overscroll-contain rounded-xl border border-slate-200">
+            <div className="flex h-[min(calc(100dvh-12rem),36rem)] flex-col overflow-hidden rounded-xl border border-slate-200">
               <div
-                className="grid gap-0"
+                className="shrink-0 grid gap-1 border-b border-slate-200 bg-white pb-1.5"
                 style={{ gridTemplateColumns: `2.75rem repeat(${Math.max(roomCalendar.length, 1)}, minmax(0, 1fr))` }}
               >
-                <div className="bg-slate-50/80">
-                  {Array.from({ length: MOBILE_SLOT_COUNT }).map((_, slotIdx) => (
-                    <div
-                      key={slotIdx}
-                      className="flex items-start border-b border-slate-200/80 px-1 pt-1 text-[10px] text-slate-500"
-                      style={{ height: MOBILE_ROW_HEIGHT_PX }}
-                    >
-                      {String(DAY_START_HOUR + slotIdx * MOBILE_SLOT_HOURS).padStart(2, '0')}:00
+                <div />
+                {roomCalendar.map(({ room }) => (
+                  <div key={room.id} className="rounded-lg border border-slate-200 px-1.5 py-1 text-center text-[10px] font-semibold leading-tight">
+                    <div className="flex items-center justify-center gap-0.5">
+                      <span className="line-clamp-2">{room.name}</span>
+                      {room.description && (
+                        <span
+                          className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-slate-200 text-[9px] font-semibold text-slate-700"
+                          title={room.description}
+                        >
+                          i
+                        </span>
+                      )}
                     </div>
-                  ))}
-                </div>
+                  </div>
+                ))}
+              </div>
 
-                {roomCalendar.map(({ room, bookings: roomBookings }) => {
+              <div
+                className="grid min-h-0 flex-1 gap-0"
+                style={{
+                  gridTemplateColumns: `2.75rem repeat(${Math.max(roomCalendar.length, 1)}, minmax(0, 1fr))`,
+                  gridTemplateRows: `repeat(${MOBILE_SLOT_COUNT}, minmax(0, 1fr))`,
+                }}
+              >
+                {Array.from({ length: MOBILE_SLOT_COUNT }).map((_, slotIdx) => (
+                  <div
+                    key={`time-${slotIdx}`}
+                    className="flex items-start border-b border-slate-200/80 bg-slate-50/80 px-1 pt-0.5 text-[10px] text-slate-500"
+                    style={{ gridColumn: 1, gridRow: slotIdx + 1 }}
+                  >
+                    {String(DAY_START_HOUR + slotIdx * MOBILE_SLOT_HOURS).padStart(2, '0')}:00
+                  </div>
+                ))}
+
+                {roomCalendar.map(({ room, bookings: roomBookings }, roomIdx) => {
                   const dayStart = dayStartFromInput(selectedDay)
-                  const trackHeight = MOBILE_SLOT_COUNT * MOBILE_ROW_HEIGHT_PX
                   return (
                     <div
                       key={room.id}
-                      className="relative border-l border-slate-200 bg-slate-50"
-                      style={{ height: trackHeight }}
+                      className="relative min-h-0 border-l border-slate-200 bg-slate-50"
+                      style={{ gridColumn: roomIdx + 2, gridRow: `1 / ${MOBILE_SLOT_COUNT + 1}` }}
                     >
                       {Array.from({ length: MOBILE_SLOT_COUNT }).map((_, slotIdx) => {
                         const rangeStart = slotIdx * MOBILE_SLOT_MINUTES
