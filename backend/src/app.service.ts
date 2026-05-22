@@ -988,11 +988,23 @@ export class AppService {
     });
     if (!series) throw new NotFoundException('Serie nicht gefunden');
 
-    const pending = series.bookings.filter(
-      (b) => b.status === BookingStatus.PENDING,
-    );
-    if (pending.length === 0) {
-      throw new BadRequestException('Keine ausstehenden Termine in dieser Serie');
+    const targets = series.bookings.filter((b) => {
+      if (decision === DecisionType.APPROVE) {
+        return b.status !== BookingStatus.APPROVED;
+      }
+      if (decision === DecisionType.REJECT) {
+        return b.status !== BookingStatus.REJECTED;
+      }
+      return b.status === BookingStatus.PENDING;
+    });
+    if (targets.length === 0) {
+      throw new BadRequestException(
+        decision === DecisionType.APPROVE
+          ? 'Alle Termine der Serie sind bereits freigegeben'
+          : decision === DecisionType.REJECT
+            ? 'Alle Termine der Serie sind bereits abgelehnt'
+            : 'Keine ausstehenden Termine in dieser Serie',
+      );
     }
 
     const nextStatus =
@@ -1003,7 +1015,7 @@ export class AppService {
           : BookingStatus.BLOCKED;
 
     await this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
-      for (const booking of pending) {
+      for (const booking of targets) {
         await tx.booking.update({
           where: { id: booking.id },
           data: { status: nextStatus },

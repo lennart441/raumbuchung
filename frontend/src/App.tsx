@@ -115,6 +115,42 @@ function seriesPendingCount(group: SeriesGroup) {
   return group.bookings.filter((b) => b.status.toUpperCase() === 'PENDING').length
 }
 
+function bookingCanApprove(status: string) {
+  const s = status.toUpperCase()
+  return s === 'PENDING' || s === 'REJECTED'
+}
+
+function bookingCanReject(status: string) {
+  const s = status.toUpperCase()
+  return s === 'PENDING' || s === 'APPROVED'
+}
+
+type AdminConfirmAction = {
+  scope: 'booking' | 'series'
+  action: 'approve' | 'reject'
+  bookingId?: string
+  seriesId?: string
+  statusHint?: string
+}
+
+function adminConfirmMessage(action: AdminConfirmAction): string {
+  if (action.scope === 'series') {
+    return action.action === 'approve'
+      ? 'Bist du sicher, dass du die Serie freigeben moechtest? Alle noch nicht freigegebenen Termine werden bestaetigt.'
+      : 'Bist du sicher, dass du die Serie ablehnen moechtest? Alle noch nicht abgelehnten Termine werden abgelehnt.'
+  }
+  const status = action.statusHint?.toUpperCase()
+  if (action.action === 'approve' && status === 'REJECTED') {
+    return 'Bist du sicher, dass du diesen abgelehnten Termin freigeben moechtest?'
+  }
+  if (action.action === 'reject' && status === 'APPROVED') {
+    return 'Bist du sicher, dass du diesen freigegebenen Termin ablehnen moechtest?'
+  }
+  return action.action === 'approve'
+    ? 'Bist du sicher, dass du diesen Termin freigeben moechtest?'
+    : 'Bist du sicher, dass du diesen Termin ablehnen moechtest?'
+}
+
 const roleLabels: Record<Me['role'], string> = {
   USER: 'Standardnutzer',
   EXTENDED_USER: 'Erweiterter Nutzer',
@@ -271,6 +307,7 @@ function App() {
   const [modalOpen, setModalOpen] = useState(false)
   const [detailsOpen, setDetailsOpen] = useState(false)
   const [seriesScopeChoice, setSeriesScopeChoice] = useState<Booking | null>(null)
+  const [adminConfirm, setAdminConfirm] = useState<AdminConfirmAction | null>(null)
   const [editingBookingId, setEditingBookingId] = useState<string | null>(null)
   const [editingSeries, setEditingSeries] = useState(false)
   const [roomId, setRoomId] = useState('')
@@ -509,17 +546,42 @@ function App() {
 
   const selectedSeriesId = selectedBooking?.seriesId ?? null
 
-  const selectedSeriesPendingCount = useMemo(() => {
-    if (!selectedSeriesId) return 0
+  const selectedSeriesBookingsList = useMemo(() => {
+    if (!selectedSeriesId) return [] as Booking[]
     const seen = new Set<string>()
-    let count = 0
+    const out: Booking[] = []
     for (const booking of [...(adminBookings.data ?? []), ...(bookings.data ?? [])]) {
       if (booking.seriesId !== selectedSeriesId || seen.has(booking.id)) continue
       seen.add(booking.id)
-      if (booking.status.toUpperCase() === 'PENDING') count++
+      out.push(booking)
     }
-    return count
+    return out
   }, [selectedSeriesId, adminBookings.data, bookings.data])
+
+  const selectedSeriesPendingCount = useMemo(
+    () => selectedSeriesBookingsList.filter((b) => b.status.toUpperCase() === 'PENDING').length,
+    [selectedSeriesBookingsList],
+  )
+
+  const selectedSeriesCanApprove = useMemo(
+    () => selectedSeriesBookingsList.some((b) => bookingCanApprove(b.status)),
+    [selectedSeriesBookingsList],
+  )
+
+  const selectedSeriesCanReject = useMemo(
+    () => selectedSeriesBookingsList.some((b) => bookingCanReject(b.status)),
+    [selectedSeriesBookingsList],
+  )
+
+  const activeSeriesCanApprove = useMemo(
+    () => activeSeriesBookings.some((b) => bookingCanApprove(b.status)),
+    [activeSeriesBookings],
+  )
+
+  const activeSeriesCanReject = useMemo(
+    () => activeSeriesBookings.some((b) => bookingCanReject(b.status)),
+    [activeSeriesBookings],
+  )
 
   const canManageSelectedSeries = useMemo(() => {
     if (!selectedSeriesId) return false
@@ -642,13 +704,26 @@ function App() {
     setSelectedBookingId('')
   }
 
-  const decide = async (id: string, action: 'approve' | 'reject') => {
-    await api.patch(`/admin/bookings/${id}/${action}`, {}, { headers })
-    await refreshAll()
+  const requestAdminDecision = (payload: AdminConfirmAction) => {
+    setAdminConfirm(payload)
   }
 
-  const decideSeries = async (seriesId: string, action: 'approve' | 'reject') => {
-    await api.patch(`/admin/bookings/series/${seriesId}/${action}`, {}, { headers })
+  const executeAdminConfirm = async () => {
+    if (!adminConfirm) return
+    if (adminConfirm.scope === 'booking' && adminConfirm.bookingId) {
+      await api.patch(
+        `/admin/bookings/${adminConfirm.bookingId}/${adminConfirm.action}`,
+        {},
+        { headers },
+      )
+    } else if (adminConfirm.scope === 'series' && adminConfirm.seriesId) {
+      await api.patch(
+        `/admin/bookings/series/${adminConfirm.seriesId}/${adminConfirm.action}`,
+        {},
+        { headers },
+      )
+    }
+    setAdminConfirm(null)
     await refreshAll()
   }
 
@@ -1129,16 +1204,28 @@ function App() {
                       <button
                         type="button"
                         className="rounded bg-teal-700 px-2 py-1 text-xs text-white"
-                        onClick={() => void decideSeries(group.seriesId, 'approve')}
+                        onClick={() =>
+                          requestAdminDecision({
+                            scope: 'series',
+                            action: 'approve',
+                            seriesId: group.seriesId,
+                          })
+                        }
                       >
-                        Ganze Serie freigeben
+                        Serie freigeben
                       </button>
                       <button
                         type="button"
                         className="rounded bg-rose-600 px-2 py-1 text-xs text-white"
-                        onClick={() => void decideSeries(group.seriesId, 'reject')}
+                        onClick={() =>
+                          requestAdminDecision({
+                            scope: 'series',
+                            action: 'reject',
+                            seriesId: group.seriesId,
+                          })
+                        }
                       >
-                        Ganze Serie ablehnen
+                        Serie ablehnen
                       </button>
                       <button
                         type="button"
@@ -1167,14 +1254,28 @@ function App() {
                               <button
                                 type="button"
                                 className="rounded bg-teal-700 px-2 py-0.5 text-white"
-                                onClick={() => void decide(booking.id, 'approve')}
+                                onClick={() =>
+                                  requestAdminDecision({
+                                    scope: 'booking',
+                                    action: 'approve',
+                                    bookingId: booking.id,
+                                    statusHint: booking.status,
+                                  })
+                                }
                               >
                                 Freigeben
                               </button>
                               <button
                                 type="button"
                                 className="rounded bg-rose-600 px-2 py-0.5 text-white"
-                                onClick={() => void decide(booking.id, 'reject')}
+                                onClick={() =>
+                                  requestAdminDecision({
+                                    scope: 'booking',
+                                    action: 'reject',
+                                    bookingId: booking.id,
+                                    statusHint: booking.status,
+                                  })
+                                }
                               >
                                 Ablehnen
                               </button>
@@ -1203,14 +1304,28 @@ function App() {
                     <button
                       type="button"
                       className="rounded bg-teal-700 px-2 py-1 text-xs text-white"
-                      onClick={() => void decide(booking.id, 'approve')}
+                      onClick={() =>
+                        requestAdminDecision({
+                          scope: 'booking',
+                          action: 'approve',
+                          bookingId: booking.id,
+                          statusHint: booking.status,
+                        })
+                      }
                     >
                       Freigeben
                     </button>
                     <button
                       type="button"
                       className="rounded bg-rose-600 px-2 py-1 text-xs text-white"
-                      onClick={() => void decide(booking.id, 'reject')}
+                      onClick={() =>
+                        requestAdminDecision({
+                          scope: 'booking',
+                          action: 'reject',
+                          bookingId: booking.id,
+                          statusHint: booking.status,
+                        })
+                      }
                     >
                       Ablehnen
                     </button>
@@ -1662,7 +1777,45 @@ function App() {
                 className="rounded bg-teal-700 px-3 py-2 text-sm font-medium text-white"
                 onClick={() => applySeriesScopeChoice('series')}
               >
-                Gesamte Serie bearbeiten
+                Serie bearbeiten
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {adminConfirm && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/45 p-4">
+          <div
+            className="w-full max-w-md rounded-2xl bg-white p-5 shadow-xl"
+            role="alertdialog"
+            aria-labelledby="admin-confirm-title"
+            aria-describedby="admin-confirm-desc"
+          >
+            <h3 id="admin-confirm-title" className="text-lg font-semibold">
+              Bestaetigung
+            </h3>
+            <p id="admin-confirm-desc" className="mt-2 text-sm text-slate-600">
+              {adminConfirmMessage(adminConfirm)}
+            </p>
+            <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:justify-end">
+              <button
+                type="button"
+                className="rounded border border-slate-300 px-3 py-2 text-sm"
+                onClick={() => setAdminConfirm(null)}
+              >
+                Abbrechen
+              </button>
+              <button
+                type="button"
+                className={
+                  adminConfirm.action === 'approve'
+                    ? 'rounded bg-teal-700 px-3 py-2 text-sm font-medium text-white'
+                    : 'rounded bg-rose-600 px-3 py-2 text-sm font-medium text-white'
+                }
+                onClick={() => void executeAdminConfirm()}
+              >
+                {adminConfirm.action === 'approve' ? 'Freigeben' : 'Ablehnen'}
               </button>
             </div>
           </div>
@@ -1908,20 +2061,9 @@ function App() {
                     </tbody>
                   </table>
                 </div>
-                {canEditSeries && !editingSeries && (
-                  <div className="mt-4">
-                    <button
-                      type="button"
-                      className="rounded border border-teal-700 px-3 py-2 text-sm text-teal-800"
-                      onClick={() => startEditSeries()}
-                    >
-                      Bearbeiten
-                    </button>
-                  </div>
-                )}
                 {canEditSeries && editingSeries && (
-                  <div className="mt-4 rounded-xl border border-slate-200 p-3">
-                    <p className="mb-2 text-sm font-medium">Ganze Serie bearbeiten</p>
+                  <div className="mt-4 rounded-xl border border-slate-200 bg-white p-3">
+                    <p className="mb-2 text-sm font-medium">Serie bearbeiten</p>
                     <p className="mb-3 text-xs text-slate-600">
                       Start und Ende beziehen sich auf den ersten Termin; alle Termine werden gemeinsam verschoben.
                     </p>
@@ -1980,33 +2122,61 @@ function App() {
                     </div>
                   </div>
                 )}
-                {isAdmin && seriesPendingCount({ seriesId: activeSeriesId, meta: activeSeriesMeta, bookings: activeSeriesBookings }) > 0 && (
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    <button
-                      type="button"
-                      className="rounded bg-teal-700 px-3 py-2 text-sm text-white"
-                      onClick={() => void decideSeries(activeSeriesId, 'approve')}
-                    >
-                      Ganze Serie freigeben
-                    </button>
-                    <button
-                      type="button"
-                      className="rounded bg-rose-600 px-3 py-2 text-sm text-white"
-                      onClick={() => void decideSeries(activeSeriesId, 'reject')}
-                    >
-                      Ganze Serie ablehnen
-                    </button>
+                {!editingSeries && canEditSeries && (
+                  <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50/50 p-4">
+                    <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Serie</p>
+                    <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                      <button
+                        type="button"
+                        className="rounded border border-teal-700 bg-white px-3 py-2 text-sm text-teal-800"
+                        onClick={() => startEditSeries()}
+                      >
+                        Bearbeiten
+                      </button>
+                      {isAdmin && activeSeriesCanApprove && (
+                        <button
+                          type="button"
+                          className="rounded bg-teal-700 px-3 py-2 text-sm text-white"
+                          onClick={() =>
+                            requestAdminDecision({
+                              scope: 'series',
+                              action: 'approve',
+                              seriesId: activeSeriesId,
+                            })
+                          }
+                        >
+                          Freigeben
+                        </button>
+                      )}
+                      {isAdmin && activeSeriesCanReject && (
+                        <button
+                          type="button"
+                          className="rounded bg-rose-600 px-3 py-2 text-sm text-white"
+                          onClick={() =>
+                            requestAdminDecision({
+                              scope: 'series',
+                              action: 'reject',
+                              seriesId: activeSeriesId,
+                            })
+                          }
+                        >
+                          Ablehnen
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        className="rounded border border-rose-300 bg-white px-3 py-2 text-sm text-rose-700"
+                        onClick={() => void deleteSeries()}
+                      >
+                        Loeschen
+                      </button>
+                    </div>
                   </div>
                 )}
-                <div className="mt-4 flex flex-wrap justify-between gap-2">
-                  {canEditSeries && (
-                    <button type="button" className="rounded bg-rose-600 px-3 py-2 text-sm text-white" onClick={() => void deleteSeries()}>
-                      Ganze Serie loeschen
-                    </button>
-                  )}
+                <div className="mt-4 flex justify-end">
                   <button
                     type="button"
-                    className="rounded border px-3 py-2 text-sm"
+                    className="rounded border border-slate-300 bg-white px-4 py-2 text-sm"
                     onClick={() => {
                       setDetailsOpen(false)
                       setDetailsScope('single')
@@ -2074,60 +2244,144 @@ function App() {
                   )}
                 </div>
 
-                {canEditSelected && editingBookingId !== selectedBooking.id && (
-                  <div className="mt-4">
-                    <button
-                      type="button"
-                      className="rounded border border-teal-700 px-3 py-2 text-sm text-teal-800"
-                      onClick={() => startEditBooking(selectedBooking)}
-                    >
-                      Bearbeiten
-                    </button>
-                  </div>
-                )}
+                {editingBookingId !== selectedBooking.id &&
+                  (canEditSelected ||
+                    (isAdmin &&
+                      (bookingCanApprove(selectedBooking.status) ||
+                        bookingCanReject(selectedBooking.status))) ||
+                    (selectedSeriesId &&
+                      (canManageSelectedSeries ||
+                        (isAdmin && (selectedSeriesCanApprove || selectedSeriesCanReject))))) && (
+                  <div className="mt-4 space-y-4 rounded-xl border border-slate-200 bg-slate-50/50 p-4">
+                    {(canEditSelected ||
+                      (isAdmin &&
+                        (bookingCanApprove(selectedBooking.status) ||
+                          bookingCanReject(selectedBooking.status)))) && (
+                      <div>
+                        <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                          Dieser Termin
+                        </p>
+                        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                          {canEditSelected && (
+                            <button
+                              type="button"
+                              className="rounded border border-teal-700 bg-white px-3 py-2 text-sm text-teal-800"
+                              onClick={() => startEditBooking(selectedBooking)}
+                            >
+                              Bearbeiten
+                            </button>
+                          )}
+                          {isAdmin && bookingCanApprove(selectedBooking.status) && (
+                            <button
+                              type="button"
+                              className="rounded bg-teal-700 px-3 py-2 text-sm text-white"
+                              onClick={() =>
+                                requestAdminDecision({
+                                  scope: 'booking',
+                                  action: 'approve',
+                                  bookingId: selectedBooking.id,
+                                  statusHint: selectedBooking.status,
+                                })
+                              }
+                            >
+                              Freigeben
+                            </button>
+                          )}
+                          {isAdmin && bookingCanReject(selectedBooking.status) && (
+                            <button
+                              type="button"
+                              className="rounded bg-rose-600 px-3 py-2 text-sm text-white"
+                              onClick={() =>
+                                requestAdminDecision({
+                                  scope: 'booking',
+                                  action: 'reject',
+                                  bookingId: selectedBooking.id,
+                                  statusHint: selectedBooking.status,
+                                })
+                              }
+                            >
+                              Ablehnen
+                            </button>
+                          )}
+                          {canEditSelected && (
+                            <button
+                              type="button"
+                              className="rounded border border-rose-300 bg-white px-3 py-2 text-sm text-rose-700 sm:col-span-2"
+                              onClick={() => void deleteBooking()}
+                            >
+                              Loeschen
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    )}
 
-                {selectedSeriesId &&
-                  (canManageSelectedSeries || (isAdmin && selectedSeriesPendingCount > 0)) && (
-                  <div className="mt-4 space-y-2 rounded-xl border border-slate-200 p-3">
-                    <p className="text-sm font-medium text-slate-800">Gesamte Serie</p>
-                    <div className="flex flex-wrap gap-2">
-                      {canManageSelectedSeries && (
-                        <>
-                          <button
-                            type="button"
-                            className="rounded border border-teal-700 px-3 py-2 text-sm text-teal-800"
-                            onClick={() => openSeriesForEdit(selectedBooking)}
-                          >
-                            Gesamte Serie bearbeiten
-                          </button>
-                          <button
-                            type="button"
-                            className="rounded bg-rose-600 px-3 py-2 text-sm text-white"
-                            onClick={() => void deleteSeries(selectedSeriesId)}
-                          >
-                            Ganze Serie loeschen
-                          </button>
-                        </>
-                      )}
-                      {isAdmin && selectedSeriesPendingCount > 0 && (
-                        <>
-                          <button
-                            type="button"
-                            className="rounded bg-teal-700 px-3 py-2 text-sm text-white"
-                            onClick={() => void decideSeries(selectedSeriesId, 'approve')}
-                          >
-                            Ganze Serie freigeben
-                          </button>
-                          <button
-                            type="button"
-                            className="rounded bg-rose-600 px-3 py-2 text-sm text-white"
-                            onClick={() => void decideSeries(selectedSeriesId, 'reject')}
-                          >
-                            Ganze Serie ablehnen
-                          </button>
-                        </>
-                      )}
-                    </div>
+                    {selectedSeriesId &&
+                      (canManageSelectedSeries ||
+                        (isAdmin && (selectedSeriesCanApprove || selectedSeriesCanReject))) && (
+                      <div
+                        className={
+                          canEditSelected ||
+                          (isAdmin &&
+                            (bookingCanApprove(selectedBooking.status) ||
+                              bookingCanReject(selectedBooking.status)))
+                            ? 'border-t border-slate-200 pt-4'
+                            : ''
+                        }
+                      >
+                        <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Serie</p>
+                        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                          {canManageSelectedSeries && (
+                            <>
+                              <button
+                                type="button"
+                                className="rounded border border-teal-700 bg-white px-3 py-2 text-sm text-teal-800"
+                                onClick={() => openSeriesForEdit(selectedBooking)}
+                              >
+                                Bearbeiten
+                              </button>
+                              <button
+                                type="button"
+                                className="rounded border border-rose-300 bg-white px-3 py-2 text-sm text-rose-700"
+                                onClick={() => void deleteSeries(selectedSeriesId)}
+                              >
+                                Loeschen
+                              </button>
+                            </>
+                          )}
+                          {isAdmin && selectedSeriesCanApprove && (
+                            <button
+                              type="button"
+                              className="rounded bg-teal-700 px-3 py-2 text-sm text-white"
+                              onClick={() =>
+                                requestAdminDecision({
+                                  scope: 'series',
+                                  action: 'approve',
+                                  seriesId: selectedSeriesId,
+                                })
+                              }
+                            >
+                              Freigeben
+                            </button>
+                          )}
+                          {isAdmin && selectedSeriesCanReject && (
+                            <button
+                              type="button"
+                              className="rounded bg-rose-600 px-3 py-2 text-sm text-white"
+                              onClick={() =>
+                                requestAdminDecision({
+                                  scope: 'series',
+                                  action: 'reject',
+                                  seriesId: selectedSeriesId,
+                                })
+                              }
+                            >
+                              Ablehnen
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
                 {canEditSelected && editingBookingId === selectedBooking.id && (
@@ -2173,40 +2427,10 @@ function App() {
                   </div>
                 )}
 
-                {isAdmin &&
-                  (selectedBooking.status.toUpperCase() === 'PENDING' || selectedSeriesPendingCount > 0) && (
-                  <div className="mt-3 space-y-2">
-                    {selectedBooking.status.toUpperCase() === 'PENDING' && (
-                      <div className="flex flex-wrap gap-2">
-                        <span className="w-full text-xs font-medium text-slate-600">Dieser Termin</span>
-                        <button
-                          type="button"
-                          className="rounded bg-teal-700 px-3 py-2 text-sm text-white"
-                          onClick={() => void decide(selectedBooking.id, 'approve')}
-                        >
-                          Freigeben
-                        </button>
-                        <button
-                          type="button"
-                          className="rounded bg-rose-600 px-3 py-2 text-sm text-white"
-                          onClick={() => void decide(selectedBooking.id, 'reject')}
-                        >
-                          Ablehnen
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                <div className="mt-4 flex flex-wrap justify-between gap-2">
-                  {canEditSelected && (
-                    <button type="button" className="rounded bg-rose-600 px-3 py-2 text-sm text-white" onClick={() => void deleteBooking()}>
-                      Termin loeschen
-                    </button>
-                  )}
+                <div className="mt-4 flex justify-end">
                   <button
                     type="button"
-                    className="rounded border px-3 py-2 text-sm"
+                    className="rounded border border-slate-300 bg-white px-4 py-2 text-sm"
                     onClick={() => {
                       setDetailsOpen(false)
                       setDetailsScope('single')
