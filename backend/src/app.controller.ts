@@ -25,6 +25,7 @@ import { RolesGuard } from './auth/roles.guard';
 import { Roles } from './auth/roles.decorator';
 import { AuthUser } from './auth/request-user';
 import { isDevAuthEnabled } from './auth/dev-auth.config';
+import { BookingRateLimitGuard } from './rate-limit/booking-rate-limit.guard';
 
 type RequestWithUser = { user: AuthUser };
 
@@ -191,7 +192,7 @@ export class AppController {
     );
   }
 
-  @UseGuards(AuthGuard)
+  @UseGuards(AuthGuard, BookingRateLimitGuard)
   @Post('bookings')
   async createBooking(
     @Req() req: RequestWithUser,
@@ -206,7 +207,7 @@ export class AppController {
     });
   }
 
-  @UseGuards(AuthGuard)
+  @UseGuards(AuthGuard, BookingRateLimitGuard)
   @Post('bookings/series/preview')
   async previewSeriesBooking(
     @Req() req: RequestWithUser,
@@ -223,7 +224,7 @@ export class AppController {
     });
   }
 
-  @UseGuards(AuthGuard)
+  @UseGuards(AuthGuard, BookingRateLimitGuard)
   @Post('bookings/series')
   async createSeriesBooking(
     @Req() req: RequestWithUser,
@@ -247,7 +248,7 @@ export class AppController {
     return this.appService.myBookings(req.user);
   }
 
-  @UseGuards(AuthGuard)
+  @UseGuards(AuthGuard, BookingRateLimitGuard)
   @Patch('bookings/:id')
   async updateBooking(
     @Req() req: RequestWithUser,
@@ -263,7 +264,7 @@ export class AppController {
     });
   }
 
-  @UseGuards(AuthGuard)
+  @UseGuards(AuthGuard, BookingRateLimitGuard)
   @Delete('bookings/:id')
   async deleteBooking(@Req() req: RequestWithUser, @Param('id') id: string) {
     return this.appService.deleteBooking(req.user, id);
@@ -278,7 +279,7 @@ export class AppController {
     return this.appService.getBookingSeries(req.user, seriesId);
   }
 
-  @UseGuards(AuthGuard)
+  @UseGuards(AuthGuard, BookingRateLimitGuard)
   @Patch('bookings/series/:seriesId')
   async updateBookingSeries(
     @Req() req: RequestWithUser,
@@ -294,7 +295,7 @@ export class AppController {
     });
   }
 
-  @UseGuards(AuthGuard)
+  @UseGuards(AuthGuard, BookingRateLimitGuard)
   @Delete('bookings/series/:seriesId')
   async deleteBookingSeries(
     @Req() req: RequestWithUser,

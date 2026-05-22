@@ -132,7 +132,6 @@ export class AppService {
         postalCode: identity.postalCode,
         city: identity.city,
         role,
-        active: true,
       },
       create: {
         authentikSub: identity.sub,
@@ -264,7 +263,8 @@ export class AppService {
   }
 
   async previewSeriesBookings(identity: AuthUser, input: SeriesBookingInput) {
-    await this.ensureUser(identity);
+    const user = await this.ensureUser(identity);
+    await this.assertUserCanBook(user.id, input.roomId);
     this.assertValidRange(input.startAt, input.endAt);
     const room = await this.prisma.room.findUnique({
       where: { id: input.roomId },
@@ -926,7 +926,11 @@ export class AppService {
 
   private async assertUserCanBook(userId: string, roomId: string) {
     const now = new Date();
-    const [globalBan, roomBan] = await Promise.all([
+    const [user, globalBan, roomBan] = await Promise.all([
+      this.prisma.user.findUnique({
+        where: { id: userId },
+        select: { active: true },
+      }),
       this.prisma.userGlobalBan.findFirst({
         where: {
           userId,
@@ -941,6 +945,9 @@ export class AppService {
         },
       }),
     ]);
+    if (!user?.active) {
+      throw new ForbiddenException('Konto ist deaktiviert');
+    }
     if (globalBan || roomBan) {
       throw new ForbiddenException('Buchung gesperrt');
     }

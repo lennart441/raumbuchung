@@ -4,6 +4,7 @@ import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { AuthGuard } from './auth/auth.guard';
 import { RolesGuard } from './auth/roles.guard';
+import { BookingRateLimitGuard } from './rate-limit/booking-rate-limit.guard';
 
 jest.mock('jose', () => ({
   createRemoteJWKSet: jest.fn(),
@@ -29,6 +30,9 @@ describe('AppController', () => {
     });
     moduleBuilder.overrideGuard(AuthGuard).useValue({ canActivate: () => true });
     moduleBuilder.overrideGuard(RolesGuard).useValue({ canActivate: () => true });
+    moduleBuilder
+      .overrideGuard(BookingRateLimitGuard)
+      .useValue({ canActivate: () => true });
     const app: TestingModule = await moduleBuilder.compile();
 
     appController = app.get<AppController>(AppController);
