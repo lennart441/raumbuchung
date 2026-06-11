@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import axios from 'axios'
 import { UserManager, WebStorageStateStore } from 'oidc-client-ts'
 import { getApiBaseUrl } from './api-base'
+import { LoginScreen } from './LoginScreen'
 
 type Me = {
   id: string
@@ -956,64 +957,18 @@ function App() {
   }
 
   if (!isLoggedIn) {
-    if (authDev === null) {
-      return (
-        <main className="min-h-screen bg-slate-100 p-4 sm:p-6">
-          <div className="mx-auto mt-16 max-w-md text-center text-sm text-slate-600">Lade Anmeldeoptionen …</div>
-        </main>
-      )
-    }
     return (
-      <main className="min-h-screen bg-slate-100 p-4 sm:p-6">
-        <div className="mx-auto mt-10 max-w-md rounded-2xl bg-white p-6 shadow sm:mt-16">
-          <h1 className="text-2xl font-semibold">Gemeinde Stocksee</h1>
-          <p className="mt-1 text-sm text-slate-600">Raumbuchung</p>
-          <p className="mt-2 text-xs text-slate-500">
-            {isOidcMode
-              ? 'Anmeldung ueber Authentik (OIDC/PKCE).'
-              : 'Entwicklungsmodus (DEV=true): keine Authentik-Konfiguration noetig.'}
-          </p>
-          {isOidcMode && !oidcManager && (
-            <p className="mt-2 text-xs text-rose-700">
-              OIDC ist aktiv, aber `VITE_AUTHENTIK_OIDC_*` ist unvollstaendig konfiguriert.
-            </p>
-          )}
-          {authError && <p className="mt-2 text-xs text-rose-700">{authError}</p>}
-          {!devRolePickerOpen ? (
-            <button
-              type="button"
-              className="mt-5 w-full rounded-lg bg-teal-700 px-3 py-2 font-medium text-white"
-              onClick={() => void handleGemeindeLogin()}
-            >
-              Mit Gemeinde Stocksee Konto anmelden
-            </button>
-          ) : (
-            <div className="mt-5 space-y-3">
-              <p className="text-sm font-medium text-slate-800">Als welche Rolle anmelden?</p>
-              <p className="text-xs text-slate-500">Nur fuer lokale Entwicklung; es werden feste Dev-Konten verwendet.</p>
-              <div className="space-y-2">
-                {(['USER', 'EXTENDED_USER', 'ADMIN'] as Me['role'][]).map((role) => (
-                  <button
-                    key={role}
-                    type="button"
-                    onClick={() => handleDevRoleChoice(role)}
-                    className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-left text-sm hover:bg-slate-50"
-                  >
-                    {roleLabels[role]}
-                  </button>
-                ))}
-              </div>
-              <button
-                type="button"
-                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-700"
-                onClick={() => setDevRolePickerOpen(false)}
-              >
-                Zurueck
-              </button>
-            </div>
-          )}
-        </div>
-      </main>
+      <LoginScreen
+        loading={authDev === null}
+        isOidcMode={isOidcMode}
+        oidcConfigured={!!oidcManager}
+        authError={authError}
+        devRolePickerOpen={devRolePickerOpen}
+        roleLabels={roleLabels}
+        onLogin={() => void handleGemeindeLogin()}
+        onDevRoleChoice={handleDevRoleChoice}
+        onDevRolePickerClose={() => setDevRolePickerOpen(false)}
+      />
     )
   }
 
