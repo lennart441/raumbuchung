@@ -1,7 +1,7 @@
 # Raumbuchungssystem (MVP)
 
 ## Stack
-- Frontend: React + Vite + Tailwind + PWA shell
+- Frontend: React + Vite + Tailwind + PWA shell (+ Capacitor Android-App)
 - Backend: NestJS + Prisma
 - DB: PostgreSQL (Docker Compose)
 - Auth: Authentik (OIDC/JWT) wenn `DEV=false`; bei `DEV=true` Mock-Login ohne Authentik (Header `x-dev-role`)
@@ -38,7 +38,15 @@ Beim Backend-Start werden Migrationen automatisch ausgeführt und Seed-Daten ang
   - `AUTHENTIK_OIDC_JWKS_TIMEOUT_MS` (Default 5000)
   - `AUTHENTIK_OIDC_CLOCK_TOLERANCE_SEC` (Default 0)
   - `AUTHENTIK_OIDC_POST_LOGOUT_REDIRECT_URI` (Default `${AUTHENTIK_OIDC_APP_ORIGIN}`)
-  - `AUTHENTIK_OIDC_SCOPE` (Default `openid profile email phone`)
+  - `AUTHENTIK_OIDC_SCOPE` (Default `openid profile email phone`; mit `offline_access` fuer Refresh Tokens / dauerhafte Anmeldung)
+
+### Android-App (Capacitor + Authentik)
+- Separater Authentik Public Client fuer die App (PKCE, Refresh Token); Redirect: `de.stocksee.raumbuchung://oauth/callback`
+- Mobile-Build: `cp frontend/.env.mobile.example frontend/.env.mobile` (OIDC-Werte, gitignored) → `cd frontend && npm run cap:sync && npm run cap:open`
+- Die Server-`.env` nutzt `AUTHENTIK_OIDC_*`; die App braucht `VITE_AUTHENTIK_OIDC_*` in `frontend/.env.mobile` (oder AUTHENTIK_* dort — werden beim mobile-Build gemappt)
+- Production API: `VITE_API_URL=https://raum.stocksee.de/api`
+- Play-Store-Release: siehe `frontend/scripts/play-store-release.md`
+- Production `FRONTEND_ORIGIN` sollte `https://raum.stocksee.de` enthalten; Capacitor-Origins (`https://localhost`) erlaubt das Backend automatisch
 
 ## Lokaler Dev-Mode (ohne Container)
 - `cp backend/.env.example backend/.env` und `DEV=true` setzen

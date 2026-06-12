@@ -10,6 +10,9 @@ const LOCAL_DEV_DEFAULT_ORIGINS = [
   'http://127.0.0.1:8080',
 ];
 
+/** Capacitor WebView origins (Android/iOS hybrid app). */
+const CAPACITOR_ORIGINS = ['https://localhost', 'capacitor://localhost'];
+
 function uniqueOrigins(list: string[]): string[] {
   return [...new Set(list.filter(Boolean))];
 }
@@ -28,8 +31,12 @@ async function bootstrap() {
 
   const corsOrigins =
     nodeEnv === 'production'
-      ? (configuredOrigins as string[])
-      : uniqueOrigins([...LOCAL_DEV_DEFAULT_ORIGINS, ...(configuredOrigins ?? [])]);
+      ? uniqueOrigins([...(configuredOrigins as string[]), ...CAPACITOR_ORIGINS])
+      : uniqueOrigins([
+          ...LOCAL_DEV_DEFAULT_ORIGINS,
+          ...CAPACITOR_ORIGINS,
+          ...(configuredOrigins ?? []),
+        ]);
 
   const app = await NestFactory.create(AppModule);
   app.enableCors({

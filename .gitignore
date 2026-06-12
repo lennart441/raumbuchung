@@ -26,6 +26,8 @@ pids/
 .env
 .env.*
 !.env.example
+!.env.mobile.example
+!frontend/.env.mobile.example
 
 # Lokaler Docker-Dev-Stack (nginx + compose, nicht ins Repo)
 docker-compose-dev.yml

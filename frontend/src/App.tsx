@@ -1,8 +1,9 @@
-import { type PointerEvent as ReactPointerEvent, useEffect, useMemo, useState } from 'react'
+import { type PointerEvent as ReactPointerEvent, useLayoutEffect, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import axios from 'axios'
-import { UserManager, WebStorageStateStore } from 'oidc-client-ts'
 import { getApiBaseUrl } from './api-base'
+import { api, setDevAuthHeadersProvider } from './api-client'
+import { AppShell } from './AppShell'
+import { useAuth } from './auth/useAuth'
 import { LoginScreen } from './LoginScreen'
 
 type Me = {
@@ -55,15 +56,6 @@ type Availability = {
   room: Room
   bookings: Array<{ id: string; startAt: string; endAt: string; status: string; isOverbooked: boolean }>
   blocks: Array<{ id: string; startAt: string; endAt: string }>
-}
-
-const api = axios.create({
-  baseURL: getApiBaseUrl(),
-})
-
-function viteDevFallback(): boolean {
-  const v = (import.meta.env.VITE_DEV as string | undefined)?.trim().toLowerCase()
-  return v === 'true' || v === '1' || v === 'yes'
 }
 
 type Recurrence = 'DAILY' | 'WEEKLY' | 'MONTHLY'
@@ -291,12 +283,27 @@ function formatBirthDate(input?: string | null) {
 }
 
 function App() {
-  const [authDev, setAuthDev] = useState<boolean | null>(null)
-  const [devRolePickerOpen, setDevRolePickerOpen] = useState(false)
-  const [isDevLoggedIn, setIsDevLoggedIn] = useState(false)
-  const [oidcToken, setOidcToken] = useState<string | null>(null)
+  const {
+    authError,
+    authHeaders,
+    devRole,
+    devRolePickerOpen,
+    handleDevRoleChoice,
+    handleLogin,
+    handleLogout,
+    isLoggedIn,
+    isOidcMode,
+    loading: authLoading,
+    oidcConfigured,
+    configError,
+    reloadAuthConfig,
+    setDevRolePickerOpen,
+  } = useAuth()
 
-  const [devRole, setDevRole] = useState<Me['role']>('USER')
+  useLayoutEffect(() => {
+    setDevAuthHeadersProvider(() => authHeaders)
+  }, [authHeaders])
+
   const [filterTimeStart, setFilterTimeStart] = useState('')
   const [filterTimeEnd, setFilterTimeEnd] = useState('')
   const [selectedDay, setSelectedDay] = useState(toLocalInputValue(dayStartFromInput('')))
@@ -329,96 +336,29 @@ function App() {
   const [detailsScope, setDetailsScope] = useState<'single' | 'series'>('single')
   const [activeSeriesId, setActiveSeriesId] = useState<string | null>(null)
   const [selectedBookingId, setSelectedBookingId] = useState('')
-  const [authError, setAuthError] = useState<string | null>(null)
-
-  const isOidcMode = authDev === false
-
-  useEffect(() => {
-    const base = getApiBaseUrl()
-    void axios
-      .get<{ dev: boolean }>(`${base}/auth/config`)
-      .then((res) => setAuthDev(res.data.dev))
-      .catch(() => setAuthDev(viteDevFallback()))
-  }, [])
-
-  const oidcManager = useMemo(() => {
-    if (!isOidcMode) return null
-    const authority =
-      (import.meta.env.VITE_AUTHENTIK_OIDC_ISSUER as string | undefined) ??
-      (import.meta.env.VITE_AUTHENTIK_ISSUER as string | undefined)
-    const clientId =
-      (import.meta.env.VITE_AUTHENTIK_OIDC_CLIENT_ID as string | undefined) ??
-      (import.meta.env.VITE_AUTHENTIK_CLIENT_ID as string | undefined)
-    const appOrigin =
-      (import.meta.env.VITE_AUTHENTIK_OIDC_APP_ORIGIN as string | undefined) ?? window.location.origin
-    if (!authority || !clientId || !appOrigin) return null
-    return new UserManager({
-      authority,
-      client_id: clientId,
-      redirect_uri: appOrigin,
-      post_logout_redirect_uri:
-        (import.meta.env.VITE_AUTHENTIK_OIDC_POST_LOGOUT_REDIRECT_URI as string | undefined) ??
-        (import.meta.env.VITE_AUTHENTIK_POST_LOGOUT_REDIRECT_URI as string | undefined) ??
-        appOrigin,
-      response_type: 'code',
-      scope:
-        (import.meta.env.VITE_AUTHENTIK_OIDC_SCOPE as string | undefined) ??
-        (import.meta.env.VITE_AUTHENTIK_SCOPE as string | undefined) ??
-        'openid profile email',
-      userStore: new WebStorageStateStore({ store: window.sessionStorage }),
-    })
-  }, [isOidcMode])
-
-  useEffect(() => {
-    if (!isOidcMode || !oidcManager) return
-    const search = new URLSearchParams(window.location.search)
-    const hasCallbackParams = search.has('code') && search.has('state')
-    const bootstrap = async () => {
-      try {
-        if (hasCallbackParams) {
-          await oidcManager.signinRedirectCallback()
-          window.history.replaceState({}, document.title, window.location.pathname)
-        }
-        const user = await oidcManager.getUser()
-        setOidcToken(user?.access_token ?? null)
-        setAuthError(null)
-      } catch (error) {
-        setAuthError(error instanceof Error ? error.message : 'OIDC Anmeldung fehlgeschlagen')
-      }
-    }
-    void bootstrap()
-  }, [oidcManager, isOidcMode])
-
-  const isLoggedIn = isOidcMode ? Boolean(oidcToken) : isDevLoggedIn
-
-  const headers = useMemo(() => {
-    if (isOidcMode && oidcToken) return { authorization: `Bearer ${oidcToken}` }
-    if (!isOidcMode && isLoggedIn) return { 'x-dev-role': devRole }
-    return {}
-  }, [devRole, isLoggedIn, isOidcMode, oidcToken])
 
   const me = useQuery({
-    queryKey: ['me', headers],
-    queryFn: async () => (await api.get<Me>('/auth/me', { headers })).data,
+    queryKey: ['me', authHeaders],
+    queryFn: async () => (await api.get<Me>('/auth/me')).data,
     enabled: isLoggedIn,
   })
   const rooms = useQuery({
-    queryKey: ['rooms', headers],
-    queryFn: async () => (await api.get<Room[]>('/rooms', { headers })).data,
+    queryKey: ['rooms', authHeaders],
+    queryFn: async () => (await api.get<Room[]>('/rooms')).data,
     enabled: isLoggedIn,
   })
   const bookings = useQuery({
-    queryKey: ['bookings-me', headers],
-    queryFn: async () => (await api.get<Booking[]>('/bookings/me', { headers })).data,
+    queryKey: ['bookings-me', authHeaders],
+    queryFn: async () => (await api.get<Booking[]>('/bookings/me')).data,
     enabled: isLoggedIn,
   })
   const adminBookings = useQuery({
-    queryKey: ['bookings-admin', headers],
-    queryFn: async () => (await api.get<Booking[]>('/admin/bookings', { headers })).data,
+    queryKey: ['bookings-admin', authHeaders],
+    queryFn: async () => (await api.get<Booking[]>('/admin/bookings')).data,
     enabled: isLoggedIn && me.data?.role === 'ADMIN',
   })
   const availability = useQuery({
-    queryKey: ['availability-day', headers, selectedDay, rooms.data?.map((room) => room.id).join(',')],
+    queryKey: ['availability-day', authHeaders, selectedDay, rooms.data?.map((room) => room.id).join(',')],
     enabled: isLoggedIn && (rooms.data?.length ?? 0) > 0,
     queryFn: async () => {
       const from = dayStartFromInput(selectedDay)
@@ -427,7 +367,6 @@ function App() {
       const responses = await Promise.all(
         (rooms.data ?? []).map(async (room) => {
           const res = await api.get<Availability>(`/rooms/${room.id}/availability`, {
-            headers,
             params: { from: from.toISOString(), to: to.toISOString() },
           })
           return [room.id, res.data] as const
@@ -617,7 +556,6 @@ function App() {
         title,
         description,
       },
-      { headers },
     )
     await refreshAll()
     setTitle('')
@@ -640,7 +578,6 @@ function App() {
           title: title || undefined,
           description: description || undefined,
         },
-        { headers },
       )
       setSeriesPreview(res.data.occurrences)
       setSeriesSkippedStarts([])
@@ -665,7 +602,6 @@ function App() {
           description: description || undefined,
           skipStartAts: seriesSkippedStarts,
         },
-        { headers },
       )
       await refreshAll()
       setTitle('')
@@ -696,7 +632,6 @@ function App() {
         title,
         description,
       },
-      { headers },
     )
     await refreshAll()
     setDetailsOpen(false)
@@ -706,7 +641,7 @@ function App() {
 
   const deleteBooking = async () => {
     if (!selectedBooking || selectedBooking.id.startsWith('block-')) return
-    await api.delete(`/bookings/${selectedBooking.id}`, { headers })
+    await api.delete(`/bookings/${selectedBooking.id}`)
     await refreshAll()
     setDetailsOpen(false)
     setEditingBookingId(null)
@@ -724,13 +659,11 @@ function App() {
       await api.patch(
         `/admin/bookings/${adminConfirm.bookingId}/${adminConfirm.action}`,
         {},
-        { headers },
       )
     } else if (adminConfirm.scope === 'series' && adminConfirm.seriesId) {
       await api.patch(
         `/admin/bookings/series/${adminConfirm.seriesId}/${adminConfirm.action}`,
         {},
-        { headers },
       )
     }
     setAdminConfirm(null)
@@ -748,7 +681,6 @@ function App() {
         startAt: localDateTimeInputToIso(startAt),
         endAt: localDateTimeInputToIso(endAt),
       },
-      { headers },
     )
     await refreshAll()
     setDetailsOpen(false)
@@ -761,7 +693,7 @@ function App() {
   const deleteSeries = async (seriesId?: string) => {
     const id = seriesId ?? activeSeriesId
     if (!id) return
-    await api.delete(`/bookings/series/${id}`, { headers })
+    await api.delete(`/bookings/series/${id}`)
     await refreshAll()
     setDetailsOpen(false)
     setEditingBookingId(null)
@@ -872,32 +804,6 @@ function App() {
     }
   }
 
-  const handleGemeindeLogin = async () => {
-    if (isOidcMode) {
-      if (!oidcManager) return
-      await oidcManager.signinRedirect()
-      return
-    }
-    setDevRolePickerOpen(true)
-  }
-
-  const handleDevRoleChoice = (role: Me['role']) => {
-    setDevRole(role)
-    setIsDevLoggedIn(true)
-    setDevRolePickerOpen(false)
-  }
-
-  const handleLogout = async () => {
-    if (isOidcMode && oidcManager) {
-      await oidcManager.removeUser()
-      setOidcToken(null)
-      await oidcManager.signoutRedirect()
-      return
-    }
-    setDevRolePickerOpen(false)
-    setIsDevLoggedIn(false)
-  }
-
   const openModalForSelection = (room: Room, fromPx: number, toPx: number, width: number) => {
     const startMinutes = Math.floor(Math.min(pxToMinutes(fromPx, width), pxToMinutes(toPx, width)) / 15) * 15
     const endMinutes = Math.ceil(Math.max(pxToMinutes(fromPx, width), pxToMinutes(toPx, width)) / 15) * 15
@@ -959,21 +865,35 @@ function App() {
   if (!isLoggedIn) {
     return (
       <LoginScreen
-        loading={authDev === null}
+        loading={authLoading}
         isOidcMode={isOidcMode}
-        oidcConfigured={!!oidcManager}
+        oidcConfigured={oidcConfigured}
         authError={authError}
         devRolePickerOpen={devRolePickerOpen}
         roleLabels={roleLabels}
-        onLogin={() => void handleGemeindeLogin()}
+        onLogin={() => void handleLogin()}
         onDevRoleChoice={handleDevRoleChoice}
         onDevRolePickerClose={() => setDevRolePickerOpen(false)}
       />
     )
   }
 
+  const apiStatusMessage =
+    me.isError && !me.data
+      ? `Profil konnte nicht geladen werden (${getApiBaseUrl()}).`
+      : configError
+
   return (
-    <main className="min-h-screen overflow-x-hidden bg-slate-100 p-3 sm:p-5">
+    <AppShell
+      apiError={apiStatusMessage}
+      apiLoading={me.isLoading && !me.data}
+      onRetry={() => {
+        reloadAuthConfig()
+        void me.refetch()
+        void rooms.refetch()
+      }}
+    >
+    <main className="overflow-x-hidden p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-[max(0.75rem,env(safe-area-inset-top))] sm:p-5">
       <header className="mb-4 rounded-2xl bg-white p-4 shadow-sm ring-1 ring-slate-200/70">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
@@ -985,8 +905,8 @@ function App() {
               {me.data?.displayName ?? '…'} · <strong>{roleLabels[me.data?.role ?? devRole]}</strong>
             </div>
             <button
-              className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
-              onClick={handleLogout}
+              className="min-h-11 rounded-lg border border-slate-300 px-3 py-2 text-sm"
+              onClick={() => void handleLogout()}
               title="Aktuelle Sitzung beenden und zum Login zurueckkehren"
             >
               Abmelden
@@ -2484,6 +2404,7 @@ function App() {
         </div>
       )}
     </main>
+    </AppShell>
   )
 }
 

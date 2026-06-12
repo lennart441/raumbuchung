@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Raumbuchung Stocksee</string>
+    <string name="title_activity_main">Raumbuchung Stocksee</string>
+    <string name="package_name">de.stocksee.raumbuchung</string>
+    <string name="custom_url_scheme">de.stocksee.raumbuchung</string>
+</resources>

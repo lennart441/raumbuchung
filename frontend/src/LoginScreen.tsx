@@ -33,7 +33,7 @@ export function LoginScreen({
   onDevRolePickerClose,
 }: LoginScreenProps) {
   return (
-    <div className="flex min-h-screen flex-col bg-[#f3f5f2] text-slate-800">
+    <div className="flex min-h-dvh flex-col bg-[#f3f5f2] text-slate-800 pt-[env(safe-area-inset-top)]">
       <header className="border-b border-transparent bg-white/60">
         <div
           className="h-0.5 w-full"
@@ -68,7 +68,11 @@ export function LoginScreen({
             <>
               {isOidcMode && !oidcConfigured && (
                 <p className="mt-6 text-xs text-rose-700">
-                  OIDC ist aktiv, aber `VITE_AUTHENTIK_OIDC_*` ist unvollständig konfiguriert.
+                  Authentik ist nicht konfiguriert. Mobile-Build mit{' '}
+                  <code className="rounded bg-rose-50 px-1">npm run cap:sync</code> erstellen und in{' '}
+                  <code className="rounded bg-rose-50 px-1">frontend/.env.mobile</code> die Werte{' '}
+                  <code className="rounded bg-rose-50 px-1">VITE_AUTHENTIK_OIDC_ISSUER</code> und{' '}
+                  <code className="rounded bg-rose-50 px-1">VITE_AUTHENTIK_OIDC_CLIENT_ID</code> setzen.
                 </p>
               )}
               {authError && <p className="mt-4 text-sm text-rose-700">{authError}</p>}
@@ -76,7 +80,7 @@ export function LoginScreen({
               {!devRolePickerOpen ? (
                 <button
                   type="button"
-                  className="mt-8 w-full max-w-sm rounded-xl bg-[#1b5e3b] px-6 py-3.5 text-base font-medium text-white shadow-sm transition hover:bg-[#164d31] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#1b5e3b]"
+                  className="mt-8 min-h-11 w-full max-w-sm rounded-xl bg-[#1b5e3b] px-6 py-3.5 text-base font-medium text-white shadow-sm transition hover:bg-[#164d31] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#1b5e3b]"
                   onClick={onLogin}
                 >
                   Anmelden
@@ -93,7 +97,7 @@ export function LoginScreen({
                         key={role}
                         type="button"
                         onClick={() => onDevRoleChoice(role)}
-                        className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-left text-sm hover:bg-slate-50"
+                        className="min-h-11 w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-left text-sm hover:bg-slate-50"
                       >
                         {roleLabels[role]}
                       </button>
@@ -119,8 +123,8 @@ export function LoginScreen({
         </div>
       </div>
 
-      <footer className="border-t border-slate-200/80 bg-white/50 px-4 py-4 sm:px-6">
-        <div className="mx-auto flex max-w-5xl items-end justify-between gap-4">
+      <footer className="border-t border-slate-200/80 bg-white/50 px-4 py-4 pb-[max(1rem,env(safe-area-inset-bottom))] sm:px-6">
+        <div className="mx-auto flex max-w-5xl flex-col items-stretch gap-4 sm:flex-row sm:items-end sm:justify-between">
           <nav className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
             {FOOTER_LINKS.map((link) => (
               <a
@@ -137,7 +141,7 @@ export function LoginScreen({
           <img
             src={bmlehLogo}
             alt="BMLEH – Bundesministerium für Landwirtschaft, Ernährung und Heimat"
-            className="ml-auto h-40 w-auto shrink-0 object-contain sm:h-48"
+            className="mx-auto h-24 w-auto shrink-0 object-contain sm:ml-auto sm:h-32 md:h-40"
           />
         </div>
       </footer>

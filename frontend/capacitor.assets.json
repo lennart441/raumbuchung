@@ -1,0 +1,11 @@
+{
+  "android": {
+    "icon": {
+      "sources": ["src/assets/Wappen_Stocksee.png"]
+    },
+    "splash": {
+      "sources": ["src/assets/Wappen_Stocksee.png"],
+      "backgroundColor": "#f3f5f2"
+    }
+  }
+}
